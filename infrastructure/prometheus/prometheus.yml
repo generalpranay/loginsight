@@ -1,0 +1,29 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    cluster: loginsight-local
+
+scrape_configs:
+  - job_name: loginsight-api
+    static_configs:
+      - targets: ["host.docker.internal:9464"]
+    metrics_path: /metrics
+
+  - job_name: loginsight-ingestion
+    static_configs:
+      - targets: ["host.docker.internal:9465"]
+    metrics_path: /metrics
+
+  - job_name: kafka
+    static_configs:
+      - targets: ["kafka:9101"]
+
+  - job_name: elasticsearch
+    metrics_path: /_prometheus/metrics
+    static_configs:
+      - targets: ["elasticsearch:9200"]
+
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
