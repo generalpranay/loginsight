@@ -14,9 +14,9 @@
     <modules>
         <module>common</module>
         <module>telemetry</module>
-        <module>ingestion</module>
         <module>anomaly</module>
         <module>storage</module>
+        <module>ingestion</module>
         <module>api</module>
     </modules>
 
@@ -95,6 +95,11 @@
                 <version>${opentelemetry.version}</version>
                 <type>pom</type>
                 <scope>import</scope>
+            </dependency>
+            <dependency>
+                <groupId>io.opentelemetry</groupId>
+                <artifactId>opentelemetry-exporter-prometheus</artifactId>
+                <version>${opentelemetry.version}-alpha</version>
             </dependency>
 
             <!-- Kafka -->

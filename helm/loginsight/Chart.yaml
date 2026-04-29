@@ -1,0 +1,13 @@
+apiVersion: v2
+name: loginsight
+description: Log-to-Insight ingestion workers — Kafka consumers with EOS, virtual threads
+type: application
+version: 1.0.0
+appVersion: "1.0.0"
+keywords:
+  - kafka
+  - observability
+  - logging
+  - anomaly-detection
+maintainers:
+  - name: loginsight-team

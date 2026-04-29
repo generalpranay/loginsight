@@ -10,11 +10,12 @@
         <version>1.0.0-SNAPSHOT</version>
     </parent>
 
-    <artifactId>ingestion</artifactId>
-    <name>Log-to-Insight :: Ingestion</name>
-    <description>Kafka consumer with Exactly-Once Semantics, StickyAssignor, and virtual thread poll loop</description>
+    <artifactId>api</artifactId>
+    <name>Log-to-Insight :: API</name>
+    <description>Spring Boot REST API (virtual threads). GET /logs, GET /alerts, GET /metrics/summary</description>
 
     <dependencies>
+        <!-- Internal modules -->
         <dependency>
             <groupId>com.loginsight</groupId>
             <artifactId>common</artifactId>
@@ -25,36 +26,49 @@
         </dependency>
         <dependency>
             <groupId>com.loginsight</groupId>
+            <artifactId>ingestion</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.loginsight</groupId>
             <artifactId>anomaly</artifactId>
         </dependency>
         <dependency>
             <groupId>com.loginsight</groupId>
             <artifactId>storage</artifactId>
         </dependency>
+
+        <!-- Spring Boot (REST layer only — no WebFlux) -->
         <dependency>
-            <groupId>org.apache.kafka</groupId>
-            <artifactId>kafka-clients</artifactId>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
         </dependency>
         <dependency>
-            <groupId>com.fasterxml.jackson.core</groupId>
-            <artifactId>jackson-databind</artifactId>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-actuator</artifactId>
         </dependency>
         <dependency>
             <groupId>com.fasterxml.jackson.datatype</groupId>
             <artifactId>jackson-datatype-jsr310</artifactId>
         </dependency>
-        <dependency>
-            <groupId>org.slf4j</groupId>
-            <artifactId>slf4j-api</artifactId>
-        </dependency>
-        <dependency>
-            <groupId>ch.qos.logback</groupId>
-            <artifactId>logback-classic</artifactId>
-        </dependency>
+
         <dependency>
             <groupId>org.junit.jupiter</groupId>
             <artifactId>junit-jupiter</artifactId>
             <scope>test</scope>
         </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+            </plugin>
+        </plugins>
+    </build>
 </project>

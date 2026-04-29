@@ -1,0 +1,105 @@
+replicaCount: 3
+
+image:
+  repository: loginsight/ingestion
+  pullPolicy: IfNotPresent
+  tag: "1.0.0"
+
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  annotations:
+    # IRSA: allows the pod to assume the IAM role for MSK + S3 access
+    eks.amazonaws.com/role-arn: ""
+  name: ""
+
+kafka:
+  bootstrapServers: ""        # Set via --set kafka.bootstrapServers=... or override in CI
+  topic: raw-logs
+  groupId: loginsight-ingestion
+  # isolation.level and StickyAssignor are set in KafkaLogConsumer; listed here for visibility
+  isolationLevel: read_committed
+  partitionStrategy: StickyAssignor
+
+elasticsearch:
+  url: "http://elasticsearch:9200"
+
+influxdb:
+  url: "http://influxdb:8086"
+  org: loginsight
+  bucket: metrics
+  # Token injected via secret; see secretRef below
+  tokenSecretName: loginsight-influxdb-secret
+  tokenSecretKey: token
+
+s3:
+  bucket: ""
+  region: us-east-1
+
+telemetry:
+  prometheusPort: 9465        # Ingestion workers use 9465; API uses 9464
+
+resources:
+  requests:
+    cpu: 500m
+    memory: 512Mi
+  limits:
+    cpu: "2"
+    memory: 2Gi
+
+autoscaling:
+  enabled: true
+  minReplicas: 3
+  maxReplicas: 12
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: 80
+
+podAnnotations:
+  prometheus.io/scrape: "true"
+  prometheus.io/port: "9465"
+  prometheus.io/path: "/metrics"
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  fsGroup: 1000
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+
+livenessProbe:
+  httpGet:
+    path: /api/v1/health
+    port: 8080
+  initialDelaySeconds: 30
+  periodSeconds: 10
+  failureThreshold: 3
+
+readinessProbe:
+  httpGet:
+    path: /api/v1/health
+    port: 8080
+  initialDelaySeconds: 15
+  periodSeconds: 5
+  failureThreshold: 3
+
+nodeSelector: {}
+tolerations: []
+affinity:
+  podAntiAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        podAffinityTerm:
+          labelSelector:
+            matchExpressions:
+              - key: app.kubernetes.io/name
+                operator: In
+                values:
+                  - loginsight
+          topologyKey: kubernetes.io/hostname

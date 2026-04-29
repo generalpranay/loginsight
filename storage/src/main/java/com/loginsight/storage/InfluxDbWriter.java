@@ -72,8 +72,8 @@ public final class InfluxDbWriter implements AutoCloseable {
                 .time(snapshot.timestamp().toEpochMilli(), WritePrecision.MS);
 
         writeApi.writePoint(bucket, org, point);
-        log.debug("Wrote MetricSnapshot: service={} mps={:.1f} errorRate={:.4f}",
-                snapshot.service(), snapshot.messagesPerSecond(), snapshot.errorRate());
+        log.debug("Wrote MetricSnapshot: service={} mps={} errorRate={}",
+                snapshot.service(), String.format("%.1f", snapshot.messagesPerSecond()), String.format("%.4f", snapshot.errorRate()));
     }
 
     /**

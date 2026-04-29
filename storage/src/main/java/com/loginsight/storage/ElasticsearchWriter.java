@@ -1,6 +1,7 @@
 package com.loginsight.storage;
 
 import co.elastic.clients.elasticsearch.ElasticsearchClient;
+import co.elastic.clients.elasticsearch._types.FieldValue;
 import co.elastic.clients.elasticsearch._types.SortOrder;
 import co.elastic.clients.elasticsearch._types.query_dsl.Query;
 import co.elastic.clients.elasticsearch.core.BulkRequest;
@@ -8,6 +9,7 @@ import co.elastic.clients.elasticsearch.core.BulkResponse;
 import co.elastic.clients.elasticsearch.core.SearchResponse;
 import co.elastic.clients.elasticsearch.core.bulk.BulkResponseItem;
 import co.elastic.clients.elasticsearch.core.search.Hit;
+import co.elastic.clients.json.JsonData;
 import co.elastic.clients.json.jackson.JacksonJsonpMapper;
 import co.elastic.clients.transport.rest_client.RestClientTransport;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -103,10 +105,10 @@ public final class ElasticsearchWriter implements AutoCloseable {
      */
     public List<LogEntry> findAllInIndex(String indexName) throws IOException {
         List<LogEntry> results = new ArrayList<>();
-        List<String> searchAfter = null;
+        List<FieldValue> searchAfter = null;
 
         while (true) {
-            final List<String> sa = searchAfter;
+            final List<FieldValue> sa = searchAfter;
             SearchResponse<LogEntry> response = client.search(s -> {
                 var req = s.index(indexName)
                         .query(Query.of(q -> q.matchAll(m -> m)))
@@ -127,7 +129,7 @@ public final class ElasticsearchWriter implements AutoCloseable {
             if (hits.size() < SEARCH_PAGE_SIZE) break;
 
             Hit<LogEntry> lastHit = hits.get(hits.size() - 1);
-            searchAfter = lastHit.sort().stream().map(Object::toString).toList();
+            searchAfter = lastHit.sort();
         }
 
         return results;
@@ -148,15 +150,15 @@ public final class ElasticsearchWriter implements AutoCloseable {
                         .filter(f -> f.term(t -> t.field("service").value(service)))
                         .filter(f -> f.range(r -> r
                                 .field("timestamp")
-                                .gte(co.elastic.clients.elasticsearch._types.FieldValue.of(from.toString()))
-                                .lt(co.elastic.clients.elasticsearch._types.FieldValue.of(to.toString()))
+                                .gte(JsonData.of(from.toString()))
+                                .lt(JsonData.of(to.toString()))
                         ))
                 ));
             } else {
                 req.query(q -> q.range(r -> r
                         .field("timestamp")
-                        .gte(co.elastic.clients.elasticsearch._types.FieldValue.of(from.toString()))
-                        .lt(co.elastic.clients.elasticsearch._types.FieldValue.of(to.toString()))
+                        .gte(JsonData.of(from.toString()))
+                        .lt(JsonData.of(to.toString()))
                 ));
             }
             return req;

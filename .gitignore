@@ -1,0 +1,30 @@
+# Build artifacts
+**/target/
+*.class
+*.jar
+*.war
+*.ear
+
+# IDE
+.idea/workspace.xml
+.idea/tasks.xml
+.idea/dictionaries/
+.idea/shelf/
+*.iws
+*.iml
+*.ipr
+
+# Claude Code
+.claude/
+
+# Logs
+*.log
+logs/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+*.env.local

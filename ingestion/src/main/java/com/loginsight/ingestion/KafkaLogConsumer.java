@@ -138,7 +138,7 @@ public final class KafkaLogConsumer implements AutoCloseable {
                         double throughput = windowCount * 1_000.0 / elapsed;
                         telemetry.updateThroughput(throughput);
                         telemetry.recordMessagesProcessed(windowCount, topic);
-                        log.debug("Throughput: {:.1f} msg/s  total={}", throughput, totalProcessed.addAndGet(windowCount));
+                        log.debug("Throughput: {} msg/s  total={}", String.format("%.1f", throughput), totalProcessed.addAndGet(windowCount));
                         windowStart = System.currentTimeMillis();
                         windowCount = 0;
                     }
