@@ -15,6 +15,7 @@ import org.slf4j.LoggerFactory;
 import java.time.Instant;
 import java.util.List;
 import java.util.Objects;
+import java.util.regex.Pattern;
 
 /**
  * Writes {@link MetricSnapshot} data points to InfluxDB 2.x and queries the most
@@ -36,23 +37,37 @@ public final class InfluxDbWriter implements AutoCloseable {
 
     private static final Logger log = LoggerFactory.getLogger(InfluxDbWriter.class);
     private static final String MEASUREMENT = "log_metrics";
+    /** Defensive guard against Flux-string injection. The controller already validates this,
+     *  but the writer keeps its own check so callers cannot bypass it. */
+    private static final Pattern SAFE_TAG = Pattern.compile("^[a-zA-Z0-9._-]{1,64}$");
 
     private final InfluxDBClient client;
     private final WriteApiBlocking writeApi;
     private final QueryApi queryApi;
     private final String org;
     private final String bucket;
+    private final boolean enabled;
 
-    /** Initialises the InfluxDB client from environment variables. */
-    public InfluxDbWriter() {
-        String url   = requireEnv("INFLUXDB_URL");
-        String token = requireEnv("INFLUXDB_TOKEN");
-        this.org     = requireEnv("INFLUXDB_ORG");
-        this.bucket  = requireEnv("INFLUXDB_BUCKET");
+    /** Initialises the InfluxDB client from the supplied config values. When {@code url} is blank
+     *  the writer starts in disabled mode and all operations are no-ops. */
+    public InfluxDbWriter(String url, String token, String org, String bucket) {
+        if (url == null || url.isBlank()) {
+            log.warn("InfluxDbWriter disabled — set INFLUXDB_URL to enable");
+            this.client   = null;
+            this.writeApi = null;
+            this.queryApi = null;
+            this.org      = null;
+            this.bucket   = null;
+            this.enabled  = false;
+            return;
+        }
 
+        this.org    = org;
+        this.bucket = bucket;
         this.client   = InfluxDBClientFactory.create(url, token.toCharArray(), org, bucket);
         this.writeApi = client.getWriteApiBlocking();
         this.queryApi = client.getQueryApi();
+        this.enabled  = true;
         log.info("InfluxDbWriter connected to {} org={} bucket={}", url, org, bucket);
     }
 
@@ -63,6 +78,7 @@ public final class InfluxDbWriter implements AutoCloseable {
      */
     public void write(MetricSnapshot snapshot) {
         Objects.requireNonNull(snapshot, "snapshot");
+        if (!enabled) return;
 
         Point point = Point.measurement(MEASUREMENT)
                 .addTag("service", snapshot.service())
@@ -84,6 +100,10 @@ public final class InfluxDbWriter implements AutoCloseable {
      * rather than querying per-request.
      */
     public MetricSnapshot queryLatest(String service) {
+        if (!enabled) return null;
+        if (service == null || !SAFE_TAG.matcher(service).matches()) {
+            throw new IllegalArgumentException("invalid service name");
+        }
         String flux = String.format("""
                 from(bucket: "%s")
                   |> range(start: -1h)
@@ -107,7 +127,7 @@ public final class InfluxDbWriter implements AutoCloseable {
 
     @Override
     public void close() {
-        client.close();
+        if (client != null) client.close();
     }
 
     private static double toDouble(Object v) {
@@ -116,11 +136,5 @@ public final class InfluxDbWriter implements AutoCloseable {
 
     private static long toLong(Object v) {
         return v instanceof Number n ? n.longValue() : 0L;
-    }
-
-    private static String requireEnv(String name) {
-        String v = System.getenv(name);
-        if (v == null || v.isBlank()) throw new IllegalStateException("Required env var not set: " + name);
-        return v;
     }
 }

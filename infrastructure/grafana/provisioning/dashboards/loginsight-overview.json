@@ -1,0 +1,75 @@
+{
+  "annotations": {"list": []},
+  "description": "Log-to-Insight pipeline overview",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Throughput (msg/s)",
+      "gridPos": {"h": 6, "w": 6, "x": 0, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "loginsight_messages_processed_per_second", "refId": "A"}],
+      "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "green"}, {"color": "yellow", "value": 10000}, {"color": "red", "value": 50000}]}}}
+    },
+    {
+      "type": "stat",
+      "title": "Active Anomalies",
+      "gridPos": {"h": 6, "w": 6, "x": 6, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "loginsight_active_anomalies", "refId": "A"}],
+      "fieldConfig": {"defaults": {"color": {"mode": "thresholds"}, "thresholds": {"mode": "absolute", "steps": [{"color": "green"}, {"color": "red", "value": 1}]}}}
+    },
+    {
+      "type": "stat",
+      "title": "Total Processed",
+      "gridPos": {"h": 6, "w": 6, "x": 12, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "sum(loginsight_messages_processed_total)", "refId": "A"}]
+    },
+    {
+      "type": "stat",
+      "title": "Total Anomalies Fired",
+      "gridPos": {"h": 6, "w": 6, "x": 18, "y": 0},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "sum(loginsight_anomaly_detected_total)", "refId": "A"}]
+    },
+    {
+      "type": "timeseries",
+      "title": "Messages Processed / sec (per service)",
+      "gridPos": {"h": 9, "w": 12, "x": 0, "y": 6},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "rate(loginsight_messages_processed_total[1m])", "legendFormat": "{{service}}", "refId": "A"}]
+    },
+    {
+      "type": "timeseries",
+      "title": "Anomalies Detected (per service)",
+      "gridPos": {"h": 9, "w": 12, "x": 12, "y": 6},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"expr": "increase(loginsight_anomaly_detected_total[5m])", "legendFormat": "{{service}} / {{status_code}}", "refId": "A"}]
+    },
+    {
+      "type": "timeseries",
+      "title": "Error Rate (InfluxDB)",
+      "gridPos": {"h": 9, "w": 24, "x": 0, "y": 15},
+      "datasource": {"type": "influxdb", "uid": "influxdb"},
+      "targets": [{"query": "from(bucket: \"metrics\") |> range(start: -1h) |> filter(fn: (r) => r._measurement == \"log_metrics\" and r._field == \"error_rate\")", "refId": "A"}]
+    }
+  ],
+  "refresh": "10s",
+  "schemaVersion": 39,
+  "style": "dark",
+  "tags": ["loginsight"],
+  "templating": {"list": []},
+  "time": {"from": "now-1h", "to": "now"},
+  "timepicker": {},
+  "timezone": "",
+  "title": "Log-to-Insight Overview",
+  "uid": "loginsight-overview",
+  "version": 1,
+  "weekStart": ""
+}

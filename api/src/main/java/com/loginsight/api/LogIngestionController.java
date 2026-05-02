@@ -1,6 +1,5 @@
 package com.loginsight.api;
 
-import com.loginsight.anomaly.AnomalyDetector;
 import com.loginsight.common.AlertEvent;
 import com.loginsight.common.LogEntry;
 import com.loginsight.common.MetricSnapshot;
@@ -10,6 +9,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.Instant;
+import java.time.format.DateTimeParseException;
 import java.util.List;
 import java.util.Map;
 
@@ -34,63 +34,64 @@ public class LogIngestionController {
 
     private static final Logger log = LoggerFactory.getLogger(LogIngestionController.class);
 
-    private final AnomalyDetector anomalyDetector;
-    private final LogQueryService logQueryService;
+    private static final int MAX_LIMIT = 1_000;
+    private static final int DEFAULT_LIMIT = 100;
+    /** Service names: alphanumerics, dash, underscore, dot, max 64 chars. Prevents injection into ES queries / log lines. */
+    private static final java.util.regex.Pattern SERVICE_PATTERN = java.util.regex.Pattern.compile("^[a-zA-Z0-9._-]{1,64}$");
 
-    public LogIngestionController(AnomalyDetector anomalyDetector, LogQueryService logQueryService) {
-        this.anomalyDetector = anomalyDetector;
+    private final LogQueryService logQueryService;
+    private final AlertSubscriber alertSubscriber;
+
+    public LogIngestionController(LogQueryService logQueryService, AlertSubscriber alertSubscriber) {
         this.logQueryService = logQueryService;
+        this.alertSubscriber = alertSubscriber;
     }
 
-    /**
-     * Returns raw log entries matching the supplied filters, ordered newest-first.
-     *
-     * @param service optional service-name filter (exact match)
-     * @param from    ISO-8601 lower bound, inclusive (defaults to 1 hour ago)
-     * @param to      ISO-8601 upper bound, exclusive (defaults to now)
-     * @param limit   max results, 1–1 000 (default 100)
-     */
     @GetMapping("/logs")
-    public ResponseEntity<List<LogEntry>> getLogs(
+    public ResponseEntity<?> getLogs(
             @RequestParam(required = false) String service,
             @RequestParam(required = false) String from,
             @RequestParam(required = false) String to,
             @RequestParam(defaultValue = "100") int limit) {
 
-        int clampedLimit = Math.min(Math.max(1, limit), 1_000);
-        Instant fromInstant = from != null ? Instant.parse(from) : Instant.now().minusSeconds(3_600);
-        Instant toInstant   = to   != null ? Instant.parse(to)   : Instant.now();
+        if (service != null && !SERVICE_PATTERN.matcher(service).matches()) {
+            return ResponseEntity.badRequest().body(Map.of("error", "invalid service name"));
+        }
+
+        int clampedLimit = Math.min(Math.max(1, limit), MAX_LIMIT);
+        Instant fromInstant;
+        Instant toInstant;
+        try {
+            fromInstant = from != null ? Instant.parse(from) : Instant.now().minusSeconds(3_600);
+            toInstant   = to   != null ? Instant.parse(to)   : Instant.now();
+        } catch (DateTimeParseException e) {
+            return ResponseEntity.badRequest().body(Map.of("error", "invalid ISO-8601 timestamp"));
+        }
+        if (!fromInstant.isBefore(toInstant)) {
+            return ResponseEntity.badRequest().body(Map.of("error", "'from' must be before 'to'"));
+        }
 
         log.debug("GET /logs service={} from={} to={} limit={}", service, fromInstant, toInstant, clampedLimit);
-        return ResponseEntity.ok(logQueryService.queryLogs(service, fromInstant, toInstant, clampedLimit));
+        List<LogEntry> entries = logQueryService.queryLogs(service, fromInstant, toInstant, clampedLimit);
+        return ResponseEntity.ok(entries);
     }
 
-    /**
-     * Returns anomaly alerts fired since startup, newest-first.
-     *
-     * @param service optional service-name filter (exact match)
-     */
     @GetMapping("/alerts")
-    public ResponseEntity<List<AlertEvent>> getAlerts(
-            @RequestParam(required = false) String service) {
-
+    public ResponseEntity<?> getAlerts(@RequestParam(required = false) String service) {
+        if (service != null && !SERVICE_PATTERN.matcher(service).matches()) {
+            return ResponseEntity.badRequest().body(Map.of("error", "invalid service name"));
+        }
         List<AlertEvent> alerts = service != null
-                ? anomalyDetector.getAlertsForService(service)
-                : anomalyDetector.getRecentAlerts().stream()
-                        .sorted((a, b) -> b.detectedAt().compareTo(a.detectedAt()))
-                        .toList();
-
+                ? alertSubscriber.getForService(service)
+                : alertSubscriber.getRecent();
         return ResponseEntity.ok(alerts);
     }
 
-    /**
-     * Returns the most-recent metric snapshot for the requested service.
-     * Responds with {@code 404} when no data is available in InfluxDB.
-     *
-     * @param service the service to query; required
-     */
     @GetMapping("/metrics/summary")
     public ResponseEntity<?> getMetricsSummary(@RequestParam String service) {
+        if (!SERVICE_PATTERN.matcher(service).matches()) {
+            return ResponseEntity.badRequest().body(Map.of("error", "invalid service name"));
+        }
         MetricSnapshot snapshot = logQueryService.getLatestMetricSnapshot(service);
         if (snapshot == null) {
             return ResponseEntity.notFound().build();
@@ -104,7 +105,6 @@ public class LogIngestionController {
         ));
     }
 
-    /** Kubernetes liveness / readiness probe endpoint. */
     @GetMapping("/health")
     public ResponseEntity<Map<String, String>> health() {
         return ResponseEntity.ok(Map.of("status", "UP", "timestamp", Instant.now().toString()));

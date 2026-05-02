@@ -16,7 +16,11 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.loginsight.common.LogEntry;
 import org.apache.http.HttpHost;
+import org.apache.http.auth.AuthScope;
+import org.apache.http.auth.UsernamePasswordCredentials;
+import org.apache.http.impl.client.BasicCredentialsProvider;
 import org.elasticsearch.client.RestClient;
+import org.elasticsearch.client.RestClientBuilder;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -49,17 +53,36 @@ public final class ElasticsearchWriter implements AutoCloseable {
 
     private final ElasticsearchClient client;
     private final RestClient restClient;
+    private final boolean enabled;
 
     /**
-     * Constructs the writer, opening a low-level HTTP connection to Elasticsearch.
+     * Constructs the writer. When {@code url} is blank the writer starts in disabled mode
+     * and all operations are no-ops, matching the AlertSubscriber pattern.
      */
-    public ElasticsearchWriter() {
-        String url = requireEnv("ELASTICSEARCH_URL");
+    public ElasticsearchWriter(String url) {
+        if (url == null || url.isBlank()) {
+            log.warn("ElasticsearchWriter disabled — set ELASTICSEARCH_URL to enable");
+            this.client = null;
+            this.restClient = null;
+            this.enabled = false;
+            return;
+        }
+
+        String user = System.getenv("ELASTICSEARCH_USERNAME");
+        String pass = System.getenv("ELASTICSEARCH_PASSWORD");
+
         ObjectMapper mapper = new ObjectMapper().registerModule(new JavaTimeModule());
-        this.restClient = RestClient.builder(HttpHost.create(url)).build();
+        RestClientBuilder builder = RestClient.builder(HttpHost.create(url));
+        if (user != null && !user.isBlank() && pass != null && !pass.isBlank()) {
+            BasicCredentialsProvider creds = new BasicCredentialsProvider();
+            creds.setCredentials(AuthScope.ANY, new UsernamePasswordCredentials(user, pass));
+            builder.setHttpClientConfigCallback(http -> http.setDefaultCredentialsProvider(creds));
+        }
+        this.restClient = builder.build();
         RestClientTransport transport = new RestClientTransport(restClient, new JacksonJsonpMapper(mapper));
         this.client = new ElasticsearchClient(transport);
-        log.info("ElasticsearchWriter connected to {}", url);
+        this.enabled = true;
+        log.info("ElasticsearchWriter connected to {} (auth={})", url, user != null && !user.isBlank());
     }
 
     /**
@@ -71,7 +94,7 @@ public final class ElasticsearchWriter implements AutoCloseable {
      */
     public void bulkWrite(List<LogEntry> entries) throws IOException {
         Objects.requireNonNull(entries, "entries");
-        if (entries.isEmpty()) return;
+        if (!enabled || entries.isEmpty()) return;
 
         BulkRequest.Builder bulk = new BulkRequest.Builder();
         for (LogEntry entry : entries) {
@@ -104,6 +127,7 @@ public final class ElasticsearchWriter implements AutoCloseable {
      * @return all {@link LogEntry} documents found in the index
      */
     public List<LogEntry> findAllInIndex(String indexName) throws IOException {
+        if (!enabled) return List.of();
         List<LogEntry> results = new ArrayList<>();
         List<FieldValue> searchAfter = null;
 
@@ -140,6 +164,7 @@ public final class ElasticsearchWriter implements AutoCloseable {
      * Used by the REST API layer.
      */
     public List<LogEntry> search(String service, Instant from, Instant to, int limit) throws IOException {
+        if (!enabled) return List.of();
         SearchResponse<LogEntry> response = client.search(s -> {
             var req = s.index("logs-*")
                     .size(Math.min(limit, 1_000))
@@ -174,6 +199,7 @@ public final class ElasticsearchWriter implements AutoCloseable {
      * Checks whether the given index exists in Elasticsearch.
      */
     public boolean indexExists(String indexName) throws IOException {
+        if (!enabled) return false;
         return client.indices().exists(e -> e.index(indexName)).value();
     }
 
@@ -181,23 +207,18 @@ public final class ElasticsearchWriter implements AutoCloseable {
      * Deletes the named index. Called by {@link S3ArchivalWorker} after a successful S3 upload.
      */
     public void deleteIndex(String indexName) throws IOException {
+        if (!enabled) return;
         client.indices().delete(d -> d.index(indexName));
         log.info("Deleted ES index '{}' after S3 archival", indexName);
     }
 
     @Override
     public void close() throws IOException {
-        restClient.close();
+        if (restClient != null) restClient.close();
     }
 
     private static String indexName(LogEntry entry) {
         LocalDate date = entry.timestamp().atZone(ZoneOffset.UTC).toLocalDate();
         return "logs-" + INDEX_DATE_FMT.format(date);
-    }
-
-    private static String requireEnv(String name) {
-        String v = System.getenv(name);
-        if (v == null || v.isBlank()) throw new IllegalStateException("Required env var not set: " + name);
-        return v;
     }
 }

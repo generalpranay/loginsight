@@ -1,10 +1,9 @@
 package com.loginsight.api;
 
-import com.loginsight.anomaly.AnomalyDetector;
 import com.loginsight.storage.ElasticsearchWriter;
 import com.loginsight.storage.InfluxDbWriter;
-import com.loginsight.storage.S3ArchivalWorker;
 import com.loginsight.telemetry.TelemetryConfig;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
@@ -14,9 +13,29 @@ import org.springframework.context.annotation.Configuration;
  * <p>All storage and telemetry classes are plain Java — no Spring annotations in the
  * modules that own them. This keeps those modules deployable as standalone JARs
  * (e.g., the ingestion worker) without dragging in the Spring container.
+ *
+ * <p>The API process does not run an {@code AnomalyDetector} of its own; alert state
+ * is sourced from the {@code anomaly-alerts} Kafka topic via {@code AlertSubscriber}.
+ * The S3 archival worker runs only inside the ingestion process — running it in two
+ * places would cause double-deletes during rebalance.
  */
 @Configuration
 public class AppConfig {
+
+    @Value("${loginsight.elasticsearch.url:}")
+    private String elasticsearchUrl;
+
+    @Value("${loginsight.influxdb.url:}")
+    private String influxDbUrl;
+
+    @Value("${loginsight.influxdb.token:}")
+    private String influxDbToken;
+
+    @Value("${loginsight.influxdb.org:}")
+    private String influxDbOrg;
+
+    @Value("${loginsight.influxdb.bucket:}")
+    private String influxDbBucket;
 
     @Bean(destroyMethod = "close")
     public TelemetryConfig telemetryConfig() {
@@ -25,29 +44,11 @@ public class AppConfig {
 
     @Bean(destroyMethod = "close")
     public ElasticsearchWriter elasticsearchWriter() {
-        return new ElasticsearchWriter();
+        return new ElasticsearchWriter(elasticsearchUrl);
     }
 
     @Bean(destroyMethod = "close")
     public InfluxDbWriter influxDbWriter() {
-        return new InfluxDbWriter();
-    }
-
-    @Bean(destroyMethod = "close")
-    public S3ArchivalWorker s3ArchivalWorker(ElasticsearchWriter esWriter) {
-        S3ArchivalWorker worker = new S3ArchivalWorker(esWriter);
-        worker.start();
-        return worker;
-    }
-
-    @Bean
-    public AnomalyDetector anomalyDetector(TelemetryConfig telemetry) {
-        return new AnomalyDetector(
-                alert -> {
-                    telemetry.recordAnomalyDetected(alert.service(), alert.statusCode());
-                    // Alert fanout (Slack, PagerDuty, etc.) wired here in production
-                },
-                telemetry
-        );
+        return new InfluxDbWriter(influxDbUrl, influxDbToken, influxDbOrg, influxDbBucket);
     }
 }

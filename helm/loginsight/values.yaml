@@ -19,7 +19,7 @@ kafka:
   bootstrapServers: ""        # Set via --set kafka.bootstrapServers=... or override in CI
   topic: raw-logs
   groupId: loginsight-ingestion
-  # isolation.level and StickyAssignor are set in KafkaLogConsumer; listed here for visibility
+  alertsTopic: anomaly-alerts
   isolationLevel: read_committed
   partitionStrategy: StickyAssignor
 
@@ -30,7 +30,6 @@ influxdb:
   url: "http://influxdb:8086"
   org: loginsight
   bucket: metrics
-  # Token injected via secret; see secretRef below
   tokenSecretName: loginsight-influxdb-secret
   tokenSecretKey: token
 
@@ -39,7 +38,10 @@ s3:
   region: us-east-1
 
 telemetry:
-  prometheusPort: 9465        # Ingestion workers use 9465; API uses 9464
+  prometheusPort: 9465        # Ingestion workers; API uses 9464
+
+metrics:
+  flushIntervalSeconds: 10
 
 resources:
   requests:
@@ -73,18 +75,18 @@ securityContext:
     drop:
       - ALL
 
+# Ingestion worker has no HTTP server — probe the Prometheus exporter port instead.
 livenessProbe:
-  httpGet:
-    path: /api/v1/health
-    port: 8080
+  tcpSocket:
+    port: 9465
   initialDelaySeconds: 30
   periodSeconds: 10
   failureThreshold: 3
 
 readinessProbe:
   httpGet:
-    path: /api/v1/health
-    port: 8080
+    path: /metrics
+    port: 9465
   initialDelaySeconds: 15
   periodSeconds: 5
   failureThreshold: 3
@@ -103,3 +105,30 @@ affinity:
                 values:
                   - loginsight
           topologyKey: kubernetes.io/hostname
+
+# ─────────────────────────────────────────────
+# REST API sub-chart values
+# ─────────────────────────────────────────────
+api:
+  enabled: true
+  replicaCount: 2
+  image:
+    repository: loginsight/api
+    tag: "1.0.0"
+    pullPolicy: IfNotPresent
+  service:
+    type: ClusterIP
+    port: 8080
+  prometheusPort: 9464
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 6
+    targetCPUUtilizationPercentage: 70

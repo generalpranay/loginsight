@@ -3,7 +3,6 @@ package com.loginsight.anomaly;
 import com.loginsight.common.AlertEvent;
 import com.loginsight.common.AlertEvent.Severity;
 import com.loginsight.common.LogEntry;
-import com.loginsight.telemetry.TelemetryConfig;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -46,17 +45,15 @@ public final class AnomalyDetector {
     private static final int    MIN_BASELINE_EVENTS = 5;
 
     private final Consumer<AlertEvent> alertSink;
-    private final TelemetryConfig telemetry;
     private final Map<WindowKey, SlidingWindow> windows  = new ConcurrentHashMap<>();
     private final List<AlertEvent>              alerts   = new CopyOnWriteArrayList<>();
 
     /**
-     * @param alertSink receives every newly-fired {@link AlertEvent}; called synchronously on the ingesting thread
-     * @param telemetry OTel instrumentation
+     * @param alertSink receives every newly-fired {@link AlertEvent}; called synchronously on the ingesting thread.
+     *                  Telemetry recording is the caller's responsibility — wire it inside the sink lambda.
      */
-    public AnomalyDetector(Consumer<AlertEvent> alertSink, TelemetryConfig telemetry) {
+    public AnomalyDetector(Consumer<AlertEvent> alertSink) {
         this.alertSink = Objects.requireNonNull(alertSink, "alertSink");
-        this.telemetry = Objects.requireNonNull(telemetry, "telemetry");
     }
 
     /**

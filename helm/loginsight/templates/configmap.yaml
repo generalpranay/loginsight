@@ -16,3 +16,5 @@ data:
   AWS_REGION:              {{ .Values.s3.region | quote }}
   OTEL_PROMETHEUS_PORT:    {{ .Values.telemetry.prometheusPort | quote }}
   SERVICE_NAME:            "loginsight-ingestion"
+  ALERTS_TOPIC:            {{ .Values.kafka.alertsTopic | quote }}
+  METRICS_FLUSH_INTERVAL_SECONDS: {{ .Values.metrics.flushIntervalSeconds | quote }}
