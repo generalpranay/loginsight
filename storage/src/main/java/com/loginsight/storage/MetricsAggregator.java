@@ -15,12 +15,29 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.LongAdder;
 
 /**
- * Per-service rolling counters that emit a {@link MetricSnapshot} to InfluxDB on a
- * fixed interval. Designed to live in the ingestion process and be fed from the same
- * batch that is bulk-indexed into Elasticsearch.
+ * Accumulates per-service throughput, error, and anomaly counters in memory and
+ * flushes a {@link MetricSnapshot} to InfluxDB on a fixed schedule.
  *
- * <p>Counters are reset every flush window so the snapshot carries the
- * messages-per-second and error-rate observed during that window only.
+ * <h2>How it fits in the pipeline</h2>
+ * <p>The ingestion process feeds every consumed {@link com.loginsight.common.LogEntry}
+ * into both {@link ElasticsearchWriter} (for durable storage) and this aggregator
+ * (for live metrics). The aggregator runs its own virtual-thread flush job and writes
+ * to InfluxDB independently — a flush failure never blocks or retries the Kafka consumer.
+ *
+ * <h2>Counter design</h2>
+ * <p>Counters use {@link java.util.concurrent.atomic.LongAdder} rather than
+ * {@code AtomicLong}. Under high concurrency, {@code LongAdder} avoids CAS contention
+ * by maintaining a cell per thread and summing on read, making it the right choice for
+ * high-frequency increment workloads like this one.
+ *
+ * <h2>Windowed (not cumulative) metrics</h2>
+ * <p>Counters are reset ({@code sumThenReset}) on every flush so the snapshot reflects
+ * the rate <em>during that interval only</em>, not a cumulative total. This produces
+ * time-series data that Grafana can graph as a rate gauge without needing to compute
+ * a derivative.
+ *
+ * <p>A new service key is registered lazily on first {@link #record} call; no
+ * pre-configuration is needed.
  */
 public final class MetricsAggregator implements AutoCloseable {
 
@@ -42,18 +59,34 @@ public final class MetricsAggregator implements AutoCloseable {
         );
     }
 
-    /** Increments the per-service counters; safe to call from any thread. */
+    /**
+     * Records one log entry against its service counters.
+     * Safe to call concurrently from multiple threads (e.g. the Kafka poll thread
+     * and any future parallel-processing threads).
+     *
+     * @param entry the log entry just consumed from Kafka
+     */
     public void record(LogEntry entry) {
         ServiceCounters c = counters.computeIfAbsent(entry.service(), k -> new ServiceCounters());
         c.total.increment();
         if (entry.isError()) c.errors.increment();
     }
 
-    /** Records that an anomaly was detected for the given service. */
+    /**
+     * Increments the anomaly counter for the given service.
+     * Called by the {@link com.loginsight.anomaly.AnomalyDetector} alert sink
+     * whenever a spike threshold is exceeded.
+     *
+     * @param service the service for which an anomaly was detected
+     */
     public void recordAnomaly(String service) {
         counters.computeIfAbsent(service, k -> new ServiceCounters()).anomalies.increment();
     }
 
+    /**
+     * Starts the background flush job on a single virtual thread.
+     * Must be called once after construction; calling multiple times is undefined.
+     */
     public void start() {
         scheduler.scheduleAtFixedRate(this::flush, flushIntervalSeconds, flushIntervalSeconds, TimeUnit.SECONDS);
         log.info("MetricsAggregator started — flush interval {}s", flushIntervalSeconds);
@@ -79,6 +112,11 @@ public final class MetricsAggregator implements AutoCloseable {
         }
     }
 
+    /**
+     * Shuts down the scheduler and performs one final flush to capture any
+     * counters that accumulated since the last scheduled run.
+     * Called by the JVM shutdown hook in {@code IngestionApplication}.
+     */
     @Override
     public void close() {
         scheduler.shutdown();
@@ -88,6 +126,7 @@ public final class MetricsAggregator implements AutoCloseable {
             Thread.currentThread().interrupt();
             scheduler.shutdownNow();
         }
+        // Final flush ensures the last partial window is not silently dropped on shutdown
         flush();
     }
 

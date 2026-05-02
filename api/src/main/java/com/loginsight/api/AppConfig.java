@@ -8,16 +8,35 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
 /**
- * Spring bean wiring for non-Spring infrastructure components.
+ * Spring {@code @Configuration} that wires the non-Spring infrastructure components
+ * into the application context as managed beans.
  *
- * <p>All storage and telemetry classes are plain Java — no Spring annotations in the
- * modules that own them. This keeps those modules deployable as standalone JARs
- * (e.g., the ingestion worker) without dragging in the Spring container.
+ * <h2>Why plain-Java storage classes?</h2>
+ * <p>{@link com.loginsight.storage.ElasticsearchWriter} and
+ * {@link com.loginsight.storage.InfluxDbWriter} deliberately contain no Spring annotations.
+ * This means the same JARs can be used in the standalone ingestion process
+ * ({@code IngestionApplication.main}) without pulling in the Spring container —
+ * a significant startup-time and footprint saving for a long-running worker process.
+ * This config class acts as the adapter between Spring's DI world and those plain objects.
  *
- * <p>The API process does not run an {@code AnomalyDetector} of its own; alert state
- * is sourced from the {@code anomaly-alerts} Kafka topic via {@code AlertSubscriber}.
- * The S3 archival worker runs only inside the ingestion process — running it in two
- * places would cause double-deletes during rebalance.
+ * <h2>Graceful degradation pattern</h2>
+ * <p>Connection URLs are injected from Spring properties with empty-string defaults
+ * (e.g. {@code loginsight.elasticsearch.url=${ELASTICSEARCH_URL:}}). Each writer checks
+ * at construction time whether its URL is blank; if so it logs a warning and operates
+ * as a no-op. This lets the API start cleanly in local development or CI environments
+ * where Elasticsearch and InfluxDB are not running, mirroring the same pattern used by
+ * {@link AlertSubscriber} for Kafka.
+ *
+ * <h2>What the API process does NOT run</h2>
+ * <ul>
+ *   <li><strong>AnomalyDetector</strong> — runs only inside the ingestion process; the API
+ *       receives alert state via the {@code anomaly-alerts} Kafka topic through
+ *       {@link AlertSubscriber}.</li>
+ *   <li><strong>S3ArchivalWorker</strong> — runs only inside the ingestion process; running
+ *       it in two places would cause duplicate ES index deletes during a rebalance.</li>
+ *   <li><strong>MetricsAggregator</strong> — also ingestion-side only; the API reads
+ *       pre-computed snapshots from InfluxDB rather than re-computing them.</li>
+ * </ul>
  */
 @Configuration
 public class AppConfig {

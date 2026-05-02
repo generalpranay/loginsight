@@ -14,18 +14,50 @@ import java.io.IOException;
 import java.util.List;
 
 /**
- * Standalone entry point for the ingestion worker process.
+ * Standalone entry point for the <strong>ingestion worker</strong> process.
  *
- * <p>Wiring on startup:
+ * <h2>Component wiring</h2>
  * <pre>
- *   KafkaLogConsumer  →  AnomalyDetector  →  AlertPublisher (Kafka topic anomaly-alerts)
- *                    ↘  MetricsAggregator →  InfluxDbWriter (every flushIntervalSeconds)
- *                    ↘  ElasticsearchWriter (bulk index)
+ *   Kafka (raw-logs)
+ *       │
+ *       ▼
+ *   KafkaLogConsumer  ──────────────────────────────► ElasticsearchWriter
+ *   (EOS poll loop,                                   (bulk index, day-partitioned)
+ *    manual offset commit)
+ *       │
+ *       ├──► AnomalyDetector  ──► AlertPublisher ──► Kafka (anomaly-alerts)
+ *       │    (sliding-window       (idempotent
+ *       │     spike detection)      producer)
+ *       │
+ *       └──► MetricsAggregator ──► InfluxDbWriter
+ *            (per-service           (flush every
+ *             counters)              N seconds)
+ *
+ *   S3ArchivalWorker  (24-hour schedule, independent of the consumer loop)
+ *       └──► ElasticsearchWriter.findAllInIndex()
+ *       └──► S3Client.putObject()
+ *       └──► ElasticsearchWriter.deleteIndex()   ← only after S3 confirms write
  * </pre>
  *
- * <p>The S3ArchivalWorker runs on a 24-hour schedule inside the same JVM. Per-batch
- * indexing is synchronous: Kafka offsets are committed only after ES bulk-write
- * succeeds (at-least-once); duplicates are suppressed downstream by ES doc IDs.
+ * <h2>At-least-once delivery guarantee</h2>
+ * <p>Kafka offsets are committed only after {@link ElasticsearchWriter#bulkWrite} returns
+ * successfully. If the ES write fails, the offset is not advanced and Kafka will redeliver
+ * the batch on the next poll cycle. ES document IDs are deterministic (set on the producer
+ * side), so redelivery results in idempotent overwrites rather than duplicates.
+ *
+ * <h2>Startup order</h2>
+ * <ol>
+ *   <li>Telemetry (Prometheus exporter) must be first so all downstream counters are registered.</li>
+ *   <li>Storage writers (ES, InfluxDB) are created next; they fail fast if their URLs are missing.</li>
+ *   <li>MetricsAggregator and S3ArchivalWorker are started before the consumer so no events
+ *       are dropped between consumer start and the first flush tick.</li>
+ *   <li>KafkaLogConsumer is started last and blocks the main thread via {@code awaitShutdown()}.</li>
+ * </ol>
+ *
+ * <h2>Graceful shutdown</h2>
+ * <p>A JVM shutdown hook (triggered by SIGTERM in Kubernetes) runs all {@code close()} calls
+ * in dependency order — consumer first (stops polling), then workers, then storage, then
+ * telemetry. This ensures in-flight batches are flushed before the process exits.
  */
 public final class IngestionApplication {
 

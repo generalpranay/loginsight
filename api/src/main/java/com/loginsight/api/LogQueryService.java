@@ -12,12 +12,23 @@ import java.time.Instant;
 import java.util.List;
 
 /**
- * Application-layer service that delegates log and metrics queries to the
- * appropriate storage backends.
+ * Application-layer service that delegates read queries to the appropriate
+ * storage backends and shields the REST layer from storage exceptions.
  *
- * <p>Sits between the REST controller and the storage module so that
- * transport errors are translated into meaningful HTTP responses at the controller
- * level without leaking storage-layer exceptions to callers.
+ * <h2>Responsibility boundary</h2>
+ * <p>This class sits between {@link LogIngestionController} (HTTP) and the storage
+ * module ({@link com.loginsight.storage.ElasticsearchWriter},
+ * {@link com.loginsight.storage.InfluxDbWriter}). It owns one specific concern:
+ * ensuring that a connectivity failure or timeout in a storage backend returns a
+ * graceful empty result to the caller rather than a 500 error or an unhandled exception.
+ *
+ * <h2>Error-handling strategy</h2>
+ * <p>All storage calls are wrapped in try/catch. On failure, the method logs the error
+ * with full context (service name, time range) and returns an empty/null result.
+ * This is intentional: a read failure on the metrics or log endpoint should not
+ * cascade into an API outage — callers can display a "no data available" state instead.
+ * Write-path failures (ingestion) carry stricter semantics and are handled by
+ * the ingestion process, not here.
  */
 @Service
 public class LogQueryService {
@@ -33,12 +44,18 @@ public class LogQueryService {
     }
 
     /**
-     * Returns log entries matching the given criteria, ordered newest-first.
+     * Returns log entries matching the given criteria from Elasticsearch, ordered newest-first.
      *
-     * @param service nullable; when non-null, restricts results to that service
-     * @param from    lower bound (inclusive); defaults to 1 hour ago when null
-     * @param to      upper bound (exclusive); defaults to now when null
-     * @param limit   max results; capped at 1 000 by the caller
+     * <p>Searches the {@code logs-*} index alias, which covers all day-partitioned indices
+     * created by the ingestion process (e.g. {@code logs-2024.01.15}). On any storage
+     * error the method logs the failure and returns an empty list so the controller
+     * can return HTTP 200 with an empty array rather than HTTP 500.
+     *
+     * @param service nullable service filter; when non-null adds a term query on the {@code service} field
+     * @param from    lower bound (inclusive) of the timestamp range
+     * @param to      upper bound (exclusive) of the timestamp range
+     * @param limit   maximum number of results to return; already capped at 1 000 by the controller
+     * @return matching log entries, newest-first; empty list on error or no results
      */
     public List<LogEntry> queryLogs(String service, Instant from, Instant to, int limit) {
         try {
@@ -50,8 +67,14 @@ public class LogQueryService {
     }
 
     /**
-     * Returns the most recent metric snapshot for the given service from InfluxDB,
-     * or {@code null} when no data is available.
+     * Returns the most recent {@link MetricSnapshot} for the given service from InfluxDB.
+     *
+     * <p>The snapshot is computed by {@code MetricsAggregator} in the ingestion process and
+     * written to the {@code log_metrics} InfluxDB measurement on a fixed flush interval.
+     * This method queries the last hour's worth of data and returns the most recent point.
+     *
+     * @param service the service name to look up; must match the tag value written by the aggregator
+     * @return the latest snapshot, or {@code null} if no data exists or InfluxDB is unavailable
      */
     public MetricSnapshot getLatestMetricSnapshot(String service) {
         try {

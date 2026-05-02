@@ -7,11 +7,24 @@ import java.util.Map;
 
 /**
  * Immutable record representing a single structured log event as it flows through
- * the ingestion pipeline — from Kafka through Elasticsearch and the anomaly detector.
+ * the entire Log-to-Insight pipeline: Kafka → ingestion worker → Elasticsearch → REST API.
  *
- * <p>The {@code statusCode} field drives anomaly detection; {@code traceId} enables
- * correlation with distributed traces. {@code tags} carries arbitrary service-defined
- * metadata without schema changes.
+ * <h2>Field responsibilities</h2>
+ * <ul>
+ *   <li>{@code id} — unique event identifier; used as the Elasticsearch document ID to
+ *       make bulk indexing idempotent (re-indexing the same event is a no-op).</li>
+ *   <li>{@code service} — the originating microservice; used as the partition key in Kafka,
+ *       the primary filter in ES queries, and the tag in InfluxDB metrics.</li>
+ *   <li>{@code statusCode} — HTTP response code; drives the anomaly detector (4xx/5xx only)
+ *       and the error-rate calculation in {@code MetricsAggregator}.</li>
+ *   <li>{@code traceId} — distributed trace correlation ID; stored in ES for cross-service
+ *       incident investigation.</li>
+ *   <li>{@code tags} — open-ended key-value metadata (e.g. region, env, version); allows
+ *       services to attach context without requiring a schema change.</li>
+ * </ul>
+ *
+ * <p>Deserialization is permissive ({@code @JsonIgnoreProperties(ignoreUnknown = true)}) so
+ * new producer fields do not break existing consumer versions.
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
 public record LogEntry(

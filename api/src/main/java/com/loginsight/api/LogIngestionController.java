@@ -14,19 +14,44 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * REST API exposing log data, anomaly alerts, and metric summaries.
+ * REST controller that exposes the Log-to-Insight read API.
  *
- * <p>All handler methods run on virtual threads (enabled via
+ * <p>All handler methods run on virtual threads (enabled project-wide via
  * {@code spring.threads.virtual.enabled=true}), so blocking Elasticsearch and
- * InfluxDB I/O does not exhaust a fixed-size thread pool.
+ * InfluxDB I/O never exhausts a fixed-size thread pool — each in-flight request
+ * parks its virtual thread cheaply until the storage backend responds.
  *
  * <h2>Endpoints</h2>
- * <ul>
- *   <li>{@code GET /api/v1/logs} — raw log entries, filterable by service and time range</li>
- *   <li>{@code GET /api/v1/alerts} — anomaly alerts, filterable by service</li>
- *   <li>{@code GET /api/v1/metrics/summary} — latest metric snapshot for a service</li>
- *   <li>{@code GET /api/v1/health} — liveness probe</li>
- * </ul>
+ * <table border="1">
+ *   <tr><th>Method + Path</th><th>Description</th><th>Key params</th></tr>
+ *   <tr>
+ *     <td>{@code GET /api/v1/logs}</td>
+ *     <td>Paged log entries from Elasticsearch, newest-first</td>
+ *     <td>{@code service}, {@code from} (ISO-8601), {@code to} (ISO-8601), {@code limit} (max 1000)</td>
+ *   </tr>
+ *   <tr>
+ *     <td>{@code GET /api/v1/alerts}</td>
+ *     <td>Anomaly alerts cached in-memory by {@link AlertSubscriber}</td>
+ *     <td>{@code service} (optional filter)</td>
+ *   </tr>
+ *   <tr>
+ *     <td>{@code GET /api/v1/metrics/summary}</td>
+ *     <td>Latest throughput/error-rate snapshot from InfluxDB</td>
+ *     <td>{@code service} (required)</td>
+ *   </tr>
+ *   <tr>
+ *     <td>{@code GET /api/v1/health}</td>
+ *     <td>Liveness probe for Kubernetes / load balancer health checks</td>
+ *     <td>—</td>
+ *   </tr>
+ * </table>
+ *
+ * <h2>Input validation</h2>
+ * <p>Service names are validated against {@code SERVICE_PATTERN} before being passed
+ * to storage backends. This prevents Elasticsearch query injection and InfluxDB Flux
+ * query injection — both backends embed the service name directly into query strings.
+ * The same regex is enforced independently by {@link com.loginsight.storage.InfluxDbWriter}
+ * as a defence-in-depth measure.
  */
 @RestController
 @RequestMapping("/api/v1")

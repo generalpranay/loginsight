@@ -15,10 +15,25 @@ import java.util.Properties;
 import java.util.UUID;
 
 /**
- * Publishes {@link AlertEvent} records to the {@code anomaly-alerts} Kafka topic
- * so the API process (and any downstream notification system) can consume them.
+ * Publishes {@link AlertEvent} records to the {@code anomaly-alerts} Kafka topic,
+ * making them available to the API process and any downstream notification system.
  *
- * <p>Idempotent producer with {@code acks=all} for durable, deduplicated writes.
+ * <h2>Producer configuration</h2>
+ * <ul>
+ *   <li><strong>Idempotent producer</strong> ({@code enable.idempotence=true}) — the broker
+ *       assigns a producer ID and sequence number to each message, detecting and discarding
+ *       exact duplicates that arise from producer retries. This prevents double-alerts if the
+ *       network drops an ACK after the broker already committed the record.</li>
+ *   <li><strong>{@code acks=all}</strong> — the broker only acknowledges the write after all
+ *       in-sync replicas have persisted the record, ensuring no alert is silently lost on a
+ *       leader failover.</li>
+ *   <li><strong>Partition key = service name</strong> — alerts for the same service always land
+ *       on the same partition, preserving order and enabling efficient per-service filtering on
+ *       the consumer side.</li>
+ * </ul>
+ *
+ * <p>The topic name defaults to {@code anomaly-alerts} and can be overridden via the
+ * {@code ALERTS_TOPIC} environment variable.
  */
 public final class AlertPublisher implements AutoCloseable {
 
@@ -46,9 +61,20 @@ public final class AlertPublisher implements AutoCloseable {
         log.info("AlertPublisher ready — topic='{}'", topic);
     }
 
+    /**
+     * Serialises the alert to JSON and sends it asynchronously to the alerts topic.
+     *
+     * <p>The send is fire-and-forget at the call site (non-blocking), but the callback
+     * logs any broker-level delivery failure so it is visible in the application logs.
+     * Serialization failures are also caught here to prevent a broken alert from
+     * propagating an exception back into the hot ingestion path.
+     *
+     * @param alert the anomaly alert produced by {@link com.loginsight.anomaly.AnomalyDetector}
+     */
     public void publish(AlertEvent alert) {
         try {
             String json = mapper.writeValueAsString(alert);
+            // Use service name as partition key so alerts for the same service stay ordered
             ProducerRecord<String, String> record = new ProducerRecord<>(topic, alert.service(), json);
             producer.send(record, (md, ex) -> {
                 if (ex != null) log.error("Failed to publish alert {}: {}", alert.alertId(), ex.getMessage());
@@ -58,9 +84,14 @@ public final class AlertPublisher implements AutoCloseable {
         }
     }
 
+    /**
+     * Flushes any buffered records and closes the producer, waiting up to 10 seconds
+     * for in-flight sends to complete before forcing a close.
+     */
     @Override
     public void close() {
         try {
+            // flush() blocks until all pending sends have been acknowledged or failed
             producer.flush();
             producer.close(Duration.ofSeconds(10));
         } catch (Exception e) {
