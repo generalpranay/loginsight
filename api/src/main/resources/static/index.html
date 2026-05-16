@@ -294,7 +294,7 @@
     <div class="sim-grid">
       <!-- Status card -->
       <div class="card">
-        <div style="font-size:14px;font-weight:600;margin-bottom:16px">Status</div>
+        <div style="font-size:14px;font-weight:600;margin-bottom:16px">Simulator</div>
         <div id="sim-stat-rows"></div>
         <div style="display:flex;gap:10px;margin-top:20px;flex-wrap:wrap">
           <button id="sim-start-btn" class="btn-primary" onclick="startSim()">▶ Start Simulation</button>
@@ -487,14 +487,23 @@ function applySimStatus(s) {
 
   // Status rows in Simulation tab
   const rows = document.getElementById('sim-stat-rows');
-  if (rows) rows.innerHTML = `
-    <div class="sim-row"><span>Status</span>
-      <span class="sim-val ${s.running ? 'sv-run' : 'sv-stop'}">${s.running ? '● Running' : '● Stopped'}</span></div>
-    <div class="sim-row"><span>Messages sent</span>
-      <span class="sim-val">${Number(s.totalSent || 0).toLocaleString()}</span></div>
-    <div class="sim-row"><span>Spike active</span>
-      <span class="sim-val ${s.spikeActive ? 'sv-spike' : ''}">${s.spikeActive ? '⚡ YES' : 'No'}</span></div>
-  `;
+  if (rows) {
+    const nextSpike = Number(s.nextSpikeInSeconds);
+    const spikeRow = s.spikeActive
+      ? `<span class="sim-val sv-spike">⚡ Active now!</span>`
+      : nextSpike >= 0
+        ? `<span class="sim-val">${nextSpike}s</span>`
+        : `<span class="sim-val sv-stop">—</span>`;
+    rows.innerHTML = `
+      <div class="sim-row"><span>Status</span>
+        <span class="sim-val ${s.running ? 'sv-run' : 'sv-stop'}">${s.running ? '● Running' : '● Stopped'}</span></div>
+      <div class="sim-row"><span>Messages sent</span>
+        <span class="sim-val">${Number(s.totalSent || 0).toLocaleString()}</span></div>
+      <div class="sim-row"><span>Spike active</span>
+        <span class="sim-val ${s.spikeActive ? 'sv-spike' : ''}">${s.spikeActive ? '⚡ YES' : 'No'}</span></div>
+      <div class="sim-row"><span>Next spike in</span>${spikeRow}</div>
+    `;
+  }
 
   // Config rows + hint
   const cfg = document.getElementById('sim-cfg-rows');

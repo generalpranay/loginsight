@@ -10,6 +10,7 @@ import org.apache.kafka.common.serialization.StringSerializer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.*;
@@ -80,7 +81,9 @@ public final class LogSimulator {
     private static final int MSGS_PER_USER_PER_SEC = 2;
     /** Which service gets spiked. */
     private static final String SPIKE_SERVICE = "payment-service";
-    /** Error spike fires every N seconds and lasts M seconds. */
+    /** Error spike fires after this many seconds on first start, then every SPIKE_INTERVAL_SEC. */
+    private static final long SPIKE_INITIAL_DELAY_SEC = 20;
+    /** Repeat interval between spikes. */
     private static final long SPIKE_INTERVAL_SEC = 90;
     private static final long SPIKE_DURATION_SEC = 15;
     /** Events per second during a spike (high enough to exceed 6× baseline). */
@@ -94,6 +97,7 @@ public final class LogSimulator {
     private volatile boolean spikeActive = false;
     private volatile ScheduledExecutorService scheduler;
     private volatile boolean running = false;
+    private volatile Instant startedAt;
 
     // ── Static helpers ────────────────────────────────────────────────────────
 
@@ -154,7 +158,7 @@ public final class LogSimulator {
 
         scheduler.scheduleAtFixedRate(
                 () -> runSpike(topic),
-                SPIKE_INTERVAL_SEC, SPIKE_INTERVAL_SEC, TimeUnit.SECONDS
+                SPIKE_INITIAL_DELAY_SEC, SPIKE_INTERVAL_SEC, TimeUnit.SECONDS
         );
 
         scheduler.scheduleAtFixedRate(
@@ -163,8 +167,9 @@ public final class LogSimulator {
         );
 
         running = true;
-        log.info("Simulator running. {} users × {} services. Spike on '{}' every {}s.",
-                USERS.length, SERVICES.length, SPIKE_SERVICE, SPIKE_INTERVAL_SEC);
+        startedAt = Instant.now();
+        log.info("Simulator running. {} users × {} services. First spike on '{}' in {}s, then every {}s.",
+                USERS.length, SERVICES.length, SPIKE_SERVICE, SPIKE_INITIAL_DELAY_SEC, SPIKE_INTERVAL_SEC);
     }
 
     /** Stops the simulator and closes the Kafka producer. This instance cannot be restarted. */
@@ -186,6 +191,15 @@ public final class LogSimulator {
     public boolean isRunning()     { return running; }
     public long    getTotalSent()  { return totalSent.get(); }
     public boolean isSpikeActive() { return spikeActive; }
+
+    /** Seconds until the next spike, or -1 if stopped / spike currently active. */
+    public long getNextSpikeInSeconds() {
+        if (!running || spikeActive || startedAt == null) return -1;
+        long elapsed = Duration.between(startedAt, Instant.now()).toSeconds();
+        if (elapsed < SPIKE_INITIAL_DELAY_SEC) return SPIKE_INITIAL_DELAY_SEC - elapsed;
+        long sinceFirst = elapsed - SPIKE_INITIAL_DELAY_SEC;
+        return SPIKE_INTERVAL_SEC - (sinceFirst % SPIKE_INTERVAL_SEC);
+    }
 
     // ── Private simulation logic ──────────────────────────────────────────────
 
