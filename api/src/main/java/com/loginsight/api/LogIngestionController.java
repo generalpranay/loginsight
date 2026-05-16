@@ -5,6 +5,7 @@ import com.loginsight.common.LogEntry;
 import com.loginsight.common.MetricSnapshot;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
@@ -12,6 +13,8 @@ import java.time.Instant;
 import java.time.format.DateTimeParseException;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.UUID;
 
 /**
  * REST controller that exposes the Log-to-Insight read API.
@@ -61,15 +64,54 @@ public class LogIngestionController {
 
     private static final int MAX_LIMIT = 1_000;
     private static final int DEFAULT_LIMIT = 100;
-    /** Service names: alphanumerics, dash, underscore, dot, max 64 chars. Prevents injection into ES queries / log lines. */
-    private static final java.util.regex.Pattern SERVICE_PATTERN = java.util.regex.Pattern.compile("^[a-zA-Z0-9._-]{1,64}$");
+    private static final java.util.regex.Pattern SERVICE_PATTERN =
+            java.util.regex.Pattern.compile("^[a-zA-Z0-9._-]{1,64}$");
+    private static final Set<String> VALID_LEVELS = Set.of("INFO", "WARN", "ERROR");
 
     private final LogQueryService logQueryService;
     private final AlertSubscriber alertSubscriber;
+    private final LogBuffer logBuffer;
 
-    public LogIngestionController(LogQueryService logQueryService, AlertSubscriber alertSubscriber) {
+    public LogIngestionController(LogQueryService logQueryService, AlertSubscriber alertSubscriber, LogBuffer logBuffer) {
         this.logQueryService = logQueryService;
         this.alertSubscriber = alertSubscriber;
+        this.logBuffer       = logBuffer;
+    }
+
+    /** Request body for manual log submission. */
+    record LogSubmitRequest(
+            String service,
+            String level,
+            Integer statusCode,
+            String message,
+            String host,
+            Map<String, String> tags) {}
+
+    @PostMapping("/logs")
+    public ResponseEntity<?> submitLog(@RequestBody LogSubmitRequest req) {
+        if (req.service() == null || !SERVICE_PATTERN.matcher(req.service()).matches())
+            return ResponseEntity.badRequest().body(Map.of("error", "invalid or missing service name"));
+        if (req.message() == null || req.message().isBlank())
+            return ResponseEntity.badRequest().body(Map.of("error", "message must not be blank"));
+        if (req.message().length() > 2_000)
+            return ResponseEntity.badRequest().body(Map.of("error", "message too long (max 2000 chars)"));
+
+        String level  = req.level() != null && VALID_LEVELS.contains(req.level().toUpperCase())
+                        ? req.level().toUpperCase() : "INFO";
+        int statusCode = req.statusCode() != null
+                         ? Math.min(Math.max(req.statusCode(), 100), 599) : 200;
+        String host   = (req.host() != null && !req.host().isBlank()) ? req.host() : "manual";
+
+        LogEntry entry = new LogEntry(
+                UUID.randomUUID().toString(),
+                req.service(), level, statusCode, req.message(), host,
+                UUID.randomUUID().toString().replace("-", ""),
+                Instant.now(),
+                req.tags() != null ? req.tags() : Map.of());
+
+        logBuffer.add(entry);
+        log.info("Manual log entry submitted: service={} level={} status={}", entry.service(), entry.level(), entry.statusCode());
+        return ResponseEntity.status(HttpStatus.CREATED).body(entry);
     }
 
     @GetMapping("/logs")

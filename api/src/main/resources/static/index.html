@@ -172,6 +172,24 @@
     #toast.show.err    { background: var(--red);   color: #fff; }
     #toast.show.info   { background: var(--accent); color: #0f172a; }
 
+    /* ── Manual log form ──────────────────────────────────────────────────── */
+    #log-form-panel {
+      display: none; margin-bottom: 14px;
+      background: var(--surface); border: 1px solid var(--accent); border-radius: var(--radius); padding: 18px;
+    }
+    #log-form-panel.open { display: block; }
+    .form-title { font-size: 14px; font-weight: 600; margin-bottom: 14px; display: flex; justify-content: space-between; align-items: center; }
+    .form-row { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 12px; }
+    .form-field { display: flex; flex-direction: column; gap: 5px; }
+    .form-field label { font-size: 12px; color: var(--muted); }
+    .form-field input, .form-field select, .form-field textarea {
+      background: var(--bg); border: 1px solid var(--border); color: var(--text);
+      padding: 7px 10px; border-radius: 6px; font-size: 13px; outline: none; font-family: inherit;
+    }
+    .form-field input:focus, .form-field select:focus, .form-field textarea:focus { border-color: var(--accent); }
+    .form-field textarea { resize: vertical; min-height: 72px; width: 100%; font-family: var(--mono); }
+    .form-actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 4px; }
+
     /* ── Misc ─────────────────────────────────────────────────────────────── */
     a { color: var(--accent); text-decoration: none; }
     a:hover { text-decoration: underline; }
@@ -258,7 +276,48 @@
         <option value="500">500</option>
       </select></label>
       <button class="btn-ghost" onclick="loadLogs()">⟳ Refresh</button>
+      <button class="btn-primary" onclick="toggleLogForm()" id="btn-new-log" style="margin-left:auto">＋ New Log</button>
     </div>
+
+    <!-- Manual log entry form -->
+    <div id="log-form-panel">
+      <div class="form-title">
+        <span>Submit a Log Entry</span>
+        <button class="btn-ghost" onclick="toggleLogForm()" style="padding:2px 8px">✕</button>
+      </div>
+      <div class="form-row">
+        <div class="form-field">
+          <label>Service *</label>
+          <select id="form-svc" style="min-width:160px"></select>
+        </div>
+        <div class="form-field">
+          <label>Level</label>
+          <select id="form-lvl">
+            <option value="INFO">INFO</option>
+            <option value="WARN">WARN</option>
+            <option value="ERROR">ERROR</option>
+          </select>
+        </div>
+        <div class="form-field">
+          <label>Status Code</label>
+          <input type="number" id="form-status" value="200" min="100" max="599" style="width:100px">
+        </div>
+        <div class="form-field">
+          <label>Host</label>
+          <input type="text" id="form-host" placeholder="manual" style="width:140px">
+        </div>
+      </div>
+      <div class="form-field" style="margin-bottom:12px">
+        <label>Message *</label>
+        <textarea id="form-msg" placeholder="Describe what happened…"></textarea>
+      </div>
+      <div id="form-error" style="color:var(--red);font-size:12px;margin-bottom:8px;display:none"></div>
+      <div class="form-actions">
+        <button class="btn-ghost" onclick="toggleLogForm()">Cancel</button>
+        <button class="btn-primary" onclick="submitLog()">Submit Log</button>
+      </div>
+    </div>
+
     <div id="logs-count"></div>
     <div class="tbl-wrap">
       <table>
@@ -719,6 +778,54 @@ function renderAlert(a) {
     </div>`;
 }
 
+/* ── Manual log form ─────────────────────────────────────────────────────── */
+function toggleLogForm() {
+  const panel = document.getElementById('log-form-panel');
+  panel.classList.toggle('open');
+  if (panel.classList.contains('open')) {
+    document.getElementById('form-msg').focus();
+    document.getElementById('form-error').style.display = 'none';
+  }
+}
+
+async function submitLog() {
+  const service = document.getElementById('form-svc').value;
+  const message = document.getElementById('form-msg').value.trim();
+  const errEl   = document.getElementById('form-error');
+
+  if (!service) { showFormErr('Select a service.'); return; }
+  if (!message) { showFormErr('Message is required.'); return; }
+
+  const body = {
+    service,
+    level:      document.getElementById('form-lvl').value,
+    statusCode: parseInt(document.getElementById('form-status').value, 10) || 200,
+    message,
+    host:       document.getElementById('form-host').value.trim() || 'manual'
+  };
+
+  try {
+    const btn = document.querySelector('#log-form-panel .btn-primary');
+    btn.disabled = true; btn.textContent = 'Submitting…';
+    await api('/api/v1/logs', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    toast('Log entry submitted', 'ok');
+    document.getElementById('log-form-panel').classList.remove('open');
+    document.getElementById('form-msg').value = '';
+    errEl.style.display = 'none';
+    await loadLogs();
+  } catch (e) {
+    showFormErr(tryParseError(e.message));
+  } finally {
+    const btn = document.querySelector('#log-form-panel .btn-primary');
+    if (btn) { btn.disabled = false; btn.textContent = 'Submit Log'; }
+  }
+}
+
+function showFormErr(msg) {
+  const el = document.getElementById('form-error');
+  el.textContent = msg; el.style.display = '';
+}
+
 /* ── Init ────────────────────────────────────────────────────────────────── */
 async function init() {
   // Fetch service list from API
@@ -728,7 +835,7 @@ async function init() {
     SERVICES = ['auth-service', 'checkout-service', 'payment-service', 'search-service', 'user-service'];
   }
 
-  // Populate service dropdowns
+  // Populate service dropdowns (filter selects + form select)
   ['log-svc', 'alert-svc'].forEach(id => {
     const sel = document.getElementById(id);
     sel.innerHTML = '<option value="">All services</option>';
@@ -739,9 +846,18 @@ async function init() {
     });
   });
 
-  // Default log time range: last 1 hour
+  // Populate form service dropdown (no "All" option — required field)
+  const formSvc = document.getElementById('form-svc');
+  formSvc.innerHTML = '<option value="">— select —</option>';
+  SERVICES.forEach(s => {
+    const o = document.createElement('option');
+    o.value = s; o.textContent = s;
+    formSvc.appendChild(o);
+  });
+
+  // Default log time range: last 24 hours (wide enough to catch simulator output)
   const now  = new Date();
-  const from = new Date(now - 3_600_000);
+  const from = new Date(now - 86_400_000);
   document.getElementById('log-to').value   = now.toISOString().slice(0, 16);
   document.getElementById('log-from').value = from.toISOString().slice(0, 16);
 
