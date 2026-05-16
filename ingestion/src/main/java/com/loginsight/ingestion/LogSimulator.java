@@ -21,9 +21,15 @@ import java.util.concurrent.atomic.AtomicLong;
  * Simulates 5 services x 20 virtual users, with a periodic error spike on one service
  * so the AnomalyDetector fires within a few minutes of startup.
  *
- * Run with:
+ * Run standalone:
  *   KAFKA_BOOTSTRAP_SERVERS=localhost:9092 mvn exec:java \
  *     -pl ingestion -Dexec.mainClass=com.loginsight.ingestion.LogSimulator
+ *
+ * Or control programmatically:
+ *   LogSimulator sim = new LogSimulator("localhost:9092");
+ *   sim.start("raw-logs");  // non-blocking
+ *   // ...
+ *   sim.stop();
  */
 public final class LogSimulator {
 
@@ -80,21 +86,38 @@ public final class LogSimulator {
     /** Events per second during a spike (high enough to exceed 6× baseline). */
     private static final int SPIKE_MSGS_PER_SEC   = 80;
 
-    // ── State ─────────────────────────────────────────────────────────────────
+    // ── Instance state ────────────────────────────────────────────────────────
     private final KafkaProducer<String, String> producer;
     private final ObjectMapper mapper;
     private final Random rng = new Random();
     private final AtomicLong totalSent = new AtomicLong();
     private volatile boolean spikeActive = false;
+    private volatile ScheduledExecutorService scheduler;
+    private volatile boolean running = false;
 
-    public static void main(String[] args) throws Exception {
+    // ── Static helpers ────────────────────────────────────────────────────────
+
+    /** Returns a copy of the simulated service names (for use by the web UI). */
+    public static String[] getServices() {
+        return SERVICES.clone();
+    }
+
+    // ── Lifecycle ─────────────────────────────────────────────────────────────
+
+    public static void main(String[] args) throws InterruptedException {
         String bootstrap = System.getenv().getOrDefault("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092");
         String topic     = System.getenv().getOrDefault("KAFKA_TOPIC", "raw-logs");
         log.info("LogSimulator starting — broker={} topic={}", bootstrap, topic);
-        new LogSimulator(bootstrap).run(topic);
+        LogSimulator sim = new LogSimulator(bootstrap);
+        Runtime.getRuntime().addShutdownHook(Thread.ofVirtual().unstarted(() -> {
+            log.info("Shutting down simulator — total sent: {}", sim.getTotalSent());
+            sim.stop();
+        }));
+        sim.start(topic);
+        Thread.currentThread().join(); // block until SIGTERM
     }
 
-    LogSimulator(String bootstrapServers) {
+    public LogSimulator(String bootstrapServers) {
         Properties p = new Properties();
         p.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG,       bootstrapServers);
         p.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG,    StringSerializer.class.getName());
@@ -108,12 +131,19 @@ public final class LogSimulator {
         this.mapper   = new ObjectMapper().registerModule(new JavaTimeModule());
     }
 
-    private void run(String topic) throws Exception {
-        ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(
+    /**
+     * Starts the simulator in background virtual threads. Returns immediately.
+     * Call {@link #stop()} to shut down cleanly.
+     *
+     * @throws IllegalStateException if already running
+     */
+    public synchronized void start(String topic) {
+        if (running) throw new IllegalStateException("Simulator is already running");
+
+        scheduler = Executors.newScheduledThreadPool(
                 USERS.length + 2, Thread.ofVirtual().name("sim-", 0).factory()
         );
 
-        // Normal traffic: each user sends at MSGS_PER_USER_PER_SEC
         long delayMicros = 1_000_000L / MSGS_PER_USER_PER_SEC;
         for (String user : USERS) {
             scheduler.scheduleAtFixedRate(
@@ -122,31 +152,42 @@ public final class LogSimulator {
             );
         }
 
-        // Spike scheduler: fires every SPIKE_INTERVAL_SEC
         scheduler.scheduleAtFixedRate(
                 () -> runSpike(topic),
                 SPIKE_INTERVAL_SEC, SPIKE_INTERVAL_SEC, TimeUnit.SECONDS
         );
 
-        // Stats reporter
         scheduler.scheduleAtFixedRate(
                 () -> log.info("--- Simulator stats: total_sent={} spike_active={}", totalSent.get(), spikeActive),
                 10, 10, TimeUnit.SECONDS
         );
 
+        running = true;
         log.info("Simulator running. {} users × {} services. Spike on '{}' every {}s.",
                 USERS.length, SERVICES.length, SPIKE_SERVICE, SPIKE_INTERVAL_SEC);
-        log.info("Press Ctrl+C to stop.");
-
-        Runtime.getRuntime().addShutdownHook(Thread.ofVirtual().unstarted(() -> {
-            log.info("Shutting down simulator — total sent: {}", totalSent.get());
-            scheduler.shutdown();
-            producer.flush();
-            producer.close();
-        }));
-
-        scheduler.awaitTermination(Long.MAX_VALUE, TimeUnit.SECONDS);
     }
+
+    /** Stops the simulator and closes the Kafka producer. This instance cannot be restarted. */
+    public synchronized void stop() {
+        if (!running) return;
+        running = false;
+        spikeActive = false;
+        if (scheduler != null) {
+            scheduler.shutdown();
+            try { scheduler.awaitTermination(5, TimeUnit.SECONDS); }
+            catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+        }
+        try { producer.flush(); producer.close(); } catch (Exception ignored) {}
+        log.info("Simulator stopped — total sent: {}", totalSent.get());
+    }
+
+    // ── Status accessors ──────────────────────────────────────────────────────
+
+    public boolean isRunning()     { return running; }
+    public long    getTotalSent()  { return totalSent.get(); }
+    public boolean isSpikeActive() { return spikeActive; }
+
+    // ── Private simulation logic ──────────────────────────────────────────────
 
     private void sendNormalEvent(String topic, String user) {
         String service = SERVICES[rng.nextInt(SERVICES.length)];
@@ -162,7 +203,7 @@ public final class LogSimulator {
         long deadline = System.currentTimeMillis() + SPIKE_DURATION_SEC * 1000;
         long sleepMs  = 1_000L / SPIKE_MSGS_PER_SEC;
 
-        while (System.currentTimeMillis() < deadline) {
+        while (System.currentTimeMillis() < deadline && running) {
             int status = weightedPick(SPIKE_STATUS_WEIGHTS);
             send(topic, buildEntry(SPIKE_SERVICE, USERS[rng.nextInt(USERS.length)], status));
             try { Thread.sleep(sleepMs); } catch (InterruptedException e) { Thread.currentThread().interrupt(); return; }

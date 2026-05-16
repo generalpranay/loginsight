@@ -1,0 +1,746 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LogInsight — Dashboard</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg:       #0f172a;
+      --surface:  #1e293b;
+      --surface2: #2d3f58;
+      --border:   #334155;
+      --text:     #e2e8f0;
+      --muted:    #94a3b8;
+      --accent:   #38bdf8;
+      --green:    #22c55e;
+      --amber:    #f59e0b;
+      --orange:   #f97316;
+      --red:      #ef4444;
+      --radius:   8px;
+      --mono:     'Courier New', 'Consolas', monospace;
+    }
+
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
+
+    /* ── Header ───────────────────────────────────────────────────────────── */
+    header {
+      position: sticky; top: 0; z-index: 100;
+      background: var(--surface); border-bottom: 1px solid var(--border);
+      display: flex; align-items: center; gap: 16px; padding: 0 24px; height: 56px;
+    }
+    .logo { display: flex; align-items: center; gap: 8px; font-size: 18px; font-weight: 700; color: var(--accent); white-space: nowrap; text-decoration: none; }
+    .logo svg { width: 22px; height: 22px; flex-shrink: 0; }
+    .header-mid { flex: 1; display: flex; align-items: center; gap: 12px; }
+    .header-right { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+
+    .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex-shrink: 0; }
+    .dot.ok   { background: var(--green); box-shadow: 0 0 6px var(--green); }
+    .dot.err  { background: var(--red);   box-shadow: 0 0 6px var(--red); }
+    .dot.blink { animation: blink 1.4s infinite; }
+    @keyframes blink { 0%,100% { opacity: 1; } 50% { opacity: 0.25; } }
+
+    #conn-label { font-size: 13px; color: var(--muted); }
+
+    .sim-pill { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 600; padding: 3px 10px; border-radius: 20px; border: 1px solid var(--border); white-space: nowrap; }
+    .sim-pill.stopped { color: var(--muted); }
+    .sim-pill.running { border-color: var(--green); color: var(--green); }
+    .sim-pill.spike   { border-color: var(--red);   color: var(--red);   animation: blink 0.8s infinite; }
+    #sim-msgs { font-size: 12px; color: var(--muted); white-space: nowrap; }
+
+    .refresh-wrap { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); border-left: 1px solid var(--border); padding-left: 10px; }
+    .refresh-wrap label { display: flex; align-items: center; gap: 5px; cursor: pointer; user-select: none; }
+    #countdown { font-weight: 700; color: var(--accent); min-width: 22px; }
+
+    /* ── Buttons ──────────────────────────────────────────────────────────── */
+    button { cursor: pointer; border: none; border-radius: var(--radius); font-size: 13px; font-weight: 500; padding: 6px 14px; transition: filter .15s, opacity .15s; line-height: 1; }
+    .btn-primary { background: var(--accent); color: #0f172a; }
+    .btn-primary:hover:not(:disabled) { filter: brightness(1.15); }
+    .btn-danger  { background: var(--red); color: #fff; }
+    .btn-danger:hover:not(:disabled)  { filter: brightness(1.1); }
+    .btn-ghost   { background: transparent; color: var(--muted); border: 1px solid var(--border); }
+    .btn-ghost:hover:not(:disabled)   { color: var(--text); border-color: var(--accent); }
+    button:disabled { opacity: 0.45; cursor: not-allowed; }
+
+    /* ── Nav ──────────────────────────────────────────────────────────────── */
+    nav { background: var(--surface); border-bottom: 1px solid var(--border); padding: 0 24px; display: flex; gap: 2px; }
+    .nav-btn { background: none; border: none; border-bottom: 2px solid transparent; border-radius: 0; padding: 12px 18px; font-size: 14px; color: var(--muted); }
+    .nav-btn:hover { color: var(--text); }
+    .nav-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+    /* ── Layout ───────────────────────────────────────────────────────────── */
+    main { padding: 24px; max-width: 1440px; margin: 0 auto; }
+    .tab { display: none; }
+    .tab.active { display: block; }
+
+    .section-hd { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+    .section-title { font-size: 15px; font-weight: 600; }
+    .section-meta  { font-size: 12px; color: var(--muted); }
+
+    /* ── Cards ────────────────────────────────────────────────────────────── */
+    .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 18px; }
+
+    /* ── Metrics grid ─────────────────────────────────────────────────────── */
+    .metrics-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 14px; margin-bottom: 32px; }
+    .metric-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; transition: border-color .2s; }
+    .metric-card.spike { border-color: var(--red); }
+    .metric-card.warn  { border-color: var(--amber); }
+    .mc-head { font-size: 13px; font-weight: 600; color: var(--accent); display: flex; align-items: center; gap: 8px; margin-bottom: 14px; }
+    .mc-row  { display: flex; justify-content: space-between; align-items: center; padding: 5px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
+    .mc-row:last-child { border-bottom: none; }
+    .mc-lbl  { color: var(--muted); }
+    .mc-val  { font-weight: 600; }
+    .val-ok   { color: var(--green); }
+    .val-warn { color: var(--amber); }
+    .val-err  { color: var(--red); }
+    .spike-tag { font-size: 10px; padding: 2px 6px; background: var(--red); color: #fff; border-radius: 4px; animation: blink 0.9s infinite; }
+
+    /* ── Badges ───────────────────────────────────────────────────────────── */
+    .badge { display: inline-block; font-size: 11px; font-weight: 600; padding: 2px 7px; border-radius: 4px; white-space: nowrap; }
+    .b-info  { background: rgba(56,189,248,.15); color: var(--accent); }
+    .b-warn  { background: rgba(245,158,11,.15);  color: var(--amber); }
+    .b-err   { background: rgba(239,68,68,.15);   color: var(--red); }
+    .b-ok    { background: rgba(34,197,94,.15);   color: var(--green); }
+    .b-2xx   { background: rgba(34,197,94,.15);   color: var(--green); }
+    .b-4xx   { background: rgba(245,158,11,.15);  color: var(--amber); }
+    .b-5xx   { background: rgba(239,68,68,.15);   color: var(--red); }
+    .b-crit  { background: rgba(239,68,68,.2); color: var(--red);   border: 1px solid var(--red); }
+    .b-high  { background: rgba(249,115,22,.15);  color: var(--orange); }
+    .b-med   { background: rgba(245,158,11,.15);  color: var(--amber); }
+    .b-low   { background: rgba(56,189,248,.15);  color: var(--accent); }
+
+    /* ── Filter bar ───────────────────────────────────────────────────────── */
+    .filter-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 14px; padding: 12px 14px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); }
+    .filter-bar label { font-size: 12px; color: var(--muted); white-space: nowrap; }
+    .filter-bar select, .filter-bar input {
+      background: var(--bg); border: 1px solid var(--border); color: var(--text);
+      padding: 5px 9px; border-radius: 6px; font-size: 13px; outline: none;
+    }
+    .filter-bar select:focus, .filter-bar input:focus { border-color: var(--accent); }
+
+    /* ── Table ────────────────────────────────────────────────────────────── */
+    .tbl-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: var(--radius); }
+    table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    thead th { padding: 10px 12px; text-align: left; font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; background: var(--surface2); white-space: nowrap; }
+    tbody td { padding: 8px 12px; border-top: 1px solid var(--border); vertical-align: middle; }
+    tbody tr:hover td { background: rgba(255,255,255,.03); }
+    .td-ts  { font-family: var(--mono); font-size: 11px; color: var(--muted); white-space: nowrap; }
+    .td-msg { max-width: 380px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); font-size: 12px; }
+
+    /* ── Empty / loading states ───────────────────────────────────────────── */
+    .empty { text-align: center; padding: 56px 24px; color: var(--muted); }
+    .empty-icon { font-size: 40px; margin-bottom: 12px; }
+    .empty p { font-size: 13px; }
+
+    /* ── Alert cards ──────────────────────────────────────────────────────── */
+    .alert-list { display: grid; gap: 10px; }
+    .alert-card { background: var(--surface); border: 1px solid var(--border); border-left: 3px solid var(--border); border-radius: var(--radius); padding: 12px 16px; }
+    .alert-card.crit   { border-left-color: var(--red); }
+    .alert-card.high   { border-left-color: var(--orange); }
+    .alert-card.medium { border-left-color: var(--amber); }
+    .alert-card.low    { border-left-color: var(--accent); }
+    .ac-head { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; flex-wrap: wrap; }
+    .ac-body { font-size: 12px; color: var(--muted); display: flex; flex-wrap: wrap; gap: 6px 24px; }
+
+    /* ── Simulation tab ───────────────────────────────────────────────────── */
+    .sim-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; max-width: 840px; }
+    @media (max-width: 640px) { .sim-grid { grid-template-columns: 1fr; } }
+    .sim-row { display: flex; justify-content: space-between; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--border); font-size: 14px; }
+    .sim-row:last-child { border-bottom: none; }
+    .sim-val { font-weight: 700; }
+    .sv-run  { color: var(--green); }
+    .sv-stop { color: var(--muted); }
+    .sv-spike{ color: var(--red); }
+
+    /* ── Message boxes ────────────────────────────────────────────────────── */
+    .msg-box { border-radius: var(--radius); padding: 10px 14px; font-size: 13px; margin-top: 14px; }
+    .msg-err  { background: rgba(239,68,68,.1);  border: 1px solid rgba(239,68,68,.3);  color: #fca5a5; }
+    .msg-ok   { background: rgba(34,197,94,.1);  border: 1px solid rgba(34,197,94,.3);  color: #86efac; }
+    .msg-info { background: rgba(56,189,248,.1); border: 1px solid rgba(56,189,248,.3); color: var(--accent); }
+
+    /* ── Toast ────────────────────────────────────────────────────────────── */
+    #toast {
+      position: fixed; bottom: 24px; right: 24px; z-index: 9999;
+      padding: 11px 20px; border-radius: var(--radius); font-size: 14px; font-weight: 500;
+      display: none; animation: slide-up .2s ease;
+    }
+    @keyframes slide-up { from { transform: translateY(16px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+    #toast.show        { display: block; }
+    #toast.show.ok     { background: var(--green); color: #052e16; }
+    #toast.show.err    { background: var(--red);   color: #fff; }
+    #toast.show.info   { background: var(--accent); color: #0f172a; }
+
+    /* ── Misc ─────────────────────────────────────────────────────────────── */
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    .divider { border: none; border-top: 1px solid var(--border); margin: 24px 0; }
+    #logs-count, #alerts-count { font-size: 12px; color: var(--muted); margin-bottom: 10px; }
+
+    @media (max-width: 768px) {
+      header { flex-wrap: wrap; height: auto; padding: 10px 16px; gap: 8px; }
+      main { padding: 16px; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- ── Header ──────────────────────────────────────────────────────────────── -->
+<header>
+  <a href="/" class="logo">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/>
+    </svg>
+    LogInsight
+  </a>
+
+  <div class="header-mid">
+    <div id="conn-dot" class="dot"></div>
+    <span id="conn-label">Connecting…</span>
+  </div>
+
+  <div class="header-right">
+    <div class="refresh-wrap">
+      <label>
+        <input type="checkbox" id="ar-chk" checked onchange="toggleAR()">
+        Auto-refresh
+      </label>
+      <span id="countdown">5s</span>
+    </div>
+    <span id="sim-pill" class="sim-pill stopped">● Stopped</span>
+    <span id="sim-msgs"></span>
+    <button id="hdr-start" class="btn-primary" onclick="startSim()">▶ Start</button>
+    <button id="hdr-stop"  class="btn-danger"  onclick="stopSim()" disabled>■ Stop</button>
+  </div>
+</header>
+
+<!-- ── Nav ─────────────────────────────────────────────────────────────────── -->
+<nav>
+  <button class="nav-btn active" data-tab="dashboard" onclick="go('dashboard')">Dashboard</button>
+  <button class="nav-btn"        data-tab="logs"       onclick="go('logs')">Logs</button>
+  <button class="nav-btn"        data-tab="alerts"     onclick="go('alerts')">Alerts</button>
+  <button class="nav-btn"        data-tab="simulation" onclick="go('simulation')">Simulation</button>
+</nav>
+
+<!-- ── Main ────────────────────────────────────────────────────────────────── -->
+<main>
+
+  <!-- Dashboard tab -->
+  <div id="tab-dashboard" class="tab active">
+    <div class="section-hd">
+      <span class="section-title">Service Metrics</span>
+      <span id="metrics-ts" class="section-meta"></span>
+    </div>
+    <div id="metrics-grid" class="metrics-grid"></div>
+
+    <div class="section-hd">
+      <span class="section-title">Recent Alerts</span>
+      <a href="#" onclick="go('alerts');return false" style="font-size:12px">View all →</a>
+    </div>
+    <div id="dash-alerts"></div>
+  </div>
+
+  <!-- Logs tab -->
+  <div id="tab-logs" class="tab">
+    <div class="filter-bar">
+      <label>Service <select id="log-svc"></select></label>
+      <label>Level <select id="log-lvl">
+        <option value="">All</option>
+        <option>INFO</option><option>WARN</option><option>ERROR</option>
+      </select></label>
+      <label>From <input type="datetime-local" id="log-from"></label>
+      <label>To   <input type="datetime-local" id="log-to"></label>
+      <label>Limit <select id="log-lim">
+        <option value="50">50</option>
+        <option value="100" selected>100</option>
+        <option value="250">250</option>
+        <option value="500">500</option>
+      </select></label>
+      <button class="btn-ghost" onclick="loadLogs()">⟳ Refresh</button>
+    </div>
+    <div id="logs-count"></div>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr>
+          <th>Time</th><th>Service</th><th>Level</th><th>Status</th><th>Host</th><th>Message</th>
+        </tr></thead>
+        <tbody id="logs-body"><tr><td colspan="6"><div class="empty"><div class="empty-icon">📋</div><p>Loading…</p></div></td></tr></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Alerts tab -->
+  <div id="tab-alerts" class="tab">
+    <div class="filter-bar">
+      <label>Service <select id="alert-svc"></select></label>
+      <button class="btn-ghost" onclick="loadAlerts()">⟳ Refresh</button>
+    </div>
+    <div id="alerts-count"></div>
+    <div id="alerts-list" class="alert-list"></div>
+  </div>
+
+  <!-- Simulation tab -->
+  <div id="tab-simulation" class="tab">
+    <div class="section-hd">
+      <span class="section-title">Log Simulator Control</span>
+    </div>
+    <p style="color:var(--muted);font-size:13px;margin-bottom:24px;max-width:680px">
+      The simulator generates realistic traffic across 5 microservices at ~40 msg/s.
+      It injects error spikes on <strong>payment-service</strong> every 90 s to trigger
+      the anomaly detector and produce alerts you can view in real time.
+    </p>
+
+    <div class="sim-grid">
+      <!-- Status card -->
+      <div class="card">
+        <div style="font-size:14px;font-weight:600;margin-bottom:16px">Status</div>
+        <div id="sim-stat-rows"></div>
+        <div style="display:flex;gap:10px;margin-top:20px;flex-wrap:wrap">
+          <button id="sim-start-btn" class="btn-primary" onclick="startSim()">▶ Start Simulation</button>
+          <button id="sim-stop-btn"  class="btn-danger"  onclick="stopSim()" disabled>■ Stop Simulation</button>
+        </div>
+        <div id="sim-msg"></div>
+      </div>
+
+      <!-- Info card -->
+      <div class="card">
+        <div style="font-size:14px;font-weight:600;margin-bottom:12px">What it simulates</div>
+        <ul style="font-size:13px;color:var(--muted);line-height:2;padding-left:18px">
+          <li>5 services: auth, checkout, payment, search, user</li>
+          <li>20 virtual users · ~40 messages / second</li>
+          <li>Weighted status codes — 200 (60 %), 4xx (20 %), 5xx (5 %)</li>
+          <li>Error spike on <strong style="color:var(--red)">payment-service</strong> every 90 s</li>
+          <li>Spike: 80 msg/s · 70 % HTTP 500 · lasts 15 s</li>
+          <li>Anomaly detector fires → alerts appear in Alerts tab</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:16px;max-width:840px">
+      <div style="font-size:14px;font-weight:600;margin-bottom:12px">Configuration</div>
+      <div id="sim-cfg-rows"></div>
+      <div id="sim-cfg-hint" style="display:none;margin-top:12px" class="msg-box msg-info">
+        Kafka bootstrap servers are not configured — start button will be disabled.
+        Set <code style="background:rgba(0,0,0,.2);padding:2px 6px;border-radius:4px">LOGINSIGHT_KAFKA_BOOTSTRAP_SERVERS</code>
+        and restart the API, or use <code style="background:rgba(0,0,0,.2);padding:2px 6px;border-radius:4px">.\run-api.ps1</code> which sets it automatically.
+      </div>
+    </div>
+  </div>
+
+</main>
+
+<div id="toast"></div>
+
+<script>
+'use strict';
+
+/* ── Constants ───────────────────────────────────────────────────────────── */
+let SERVICES = [];   // populated from /api/v1/services on init
+let currentTab = 'dashboard';
+let arEnabled = true;
+let cdVal = 5;
+let cdTimer = null;
+
+/* ── Utility ─────────────────────────────────────────────────────────────── */
+async function api(path, opts = {}) {
+  const r = await fetch(path, { headers: { Accept: 'application/json' }, ...opts });
+  if (!r.ok) {
+    const body = await r.text().catch(() => '');
+    throw new Error(body || `HTTP ${r.status}`);
+  }
+  return r.json();
+}
+
+function toast(msg, type = 'info') {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.className = `show ${type}`;
+  setTimeout(() => el.className = '', 3200);
+}
+
+function esc(s) {
+  return String(s || '')
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function relTime(iso) {
+  if (!iso) return '—';
+  const ms = Date.now() - new Date(iso).getTime();
+  if (ms < 0)       return 'just now';
+  if (ms < 60000)   return `${Math.floor(ms/1000)}s ago`;
+  if (ms < 3600000) return `${Math.floor(ms/60000)}m ago`;
+  if (ms < 86400000)return `${Math.floor(ms/3600000)}h ago`;
+  return new Date(iso).toLocaleDateString();
+}
+
+function fullTs(iso) {
+  if (!iso) return '';
+  return new Date(iso).toLocaleString();
+}
+
+function lvlBadge(l) {
+  const cls = l === 'ERROR' ? 'b-err' : l === 'WARN' ? 'b-warn' : 'b-info';
+  return `<span class="badge ${cls}">${esc(l)}</span>`;
+}
+
+function stsBadge(code) {
+  const n = Number(code);
+  const cls = n >= 500 ? 'b-5xx' : n >= 400 ? 'b-4xx' : 'b-2xx';
+  return `<span class="badge ${cls}">${code}</span>`;
+}
+
+function sevBadge(sev) {
+  const s = (sev || 'MEDIUM').toUpperCase();
+  const cls = s === 'CRITICAL' ? 'b-crit' : s === 'HIGH' ? 'b-high' : s === 'MEDIUM' ? 'b-med' : 'b-low';
+  return `<span class="badge ${cls}">${s}</span>`;
+}
+
+/* ── Auto-refresh / countdown ────────────────────────────────────────────── */
+function toggleAR() {
+  arEnabled = document.getElementById('ar-chk').checked;
+  if (arEnabled) startCD();
+  else { clearTimeout(cdTimer); document.getElementById('countdown').textContent = '—'; }
+}
+
+function startCD() {
+  clearTimeout(cdTimer);
+  cdVal = 5;
+  tick();
+}
+
+function tick() {
+  document.getElementById('countdown').textContent = cdVal + 's';
+  if (cdVal <= 0) {
+    refresh().then(() => { if (arEnabled) startCD(); });
+  } else {
+    cdVal--;
+    cdTimer = setTimeout(tick, 1000);
+  }
+}
+
+/* ── Tab navigation ──────────────────────────────────────────────────────── */
+function go(name) {
+  document.querySelectorAll('.tab').forEach(el => el.classList.remove('active'));
+  document.querySelectorAll('.nav-btn').forEach(el => el.classList.remove('active'));
+  document.getElementById('tab-' + name).classList.add('active');
+  document.querySelector(`[data-tab="${name}"]`).classList.add('active');
+  currentTab = name;
+  refresh();
+}
+
+/* ── Master refresh ──────────────────────────────────────────────────────── */
+async function refresh() {
+  await Promise.allSettled([checkHealth(), loadSimStatus()]);
+  if      (currentTab === 'dashboard')  await loadDashboard();
+  else if (currentTab === 'logs')       await loadLogs();
+  else if (currentTab === 'alerts')     await loadAlerts();
+}
+
+/* ── Health ──────────────────────────────────────────────────────────────── */
+async function checkHealth() {
+  const dot   = document.getElementById('conn-dot');
+  const label = document.getElementById('conn-label');
+  try {
+    await api('/api/v1/health');
+    dot.className = 'dot ok';
+    label.textContent = 'Connected';
+    label.style.color = '';
+  } catch {
+    dot.className = 'dot err';
+    label.textContent = 'Disconnected';
+    label.style.color = 'var(--red)';
+  }
+}
+
+/* ── Simulation status ───────────────────────────────────────────────────── */
+async function loadSimStatus() {
+  try {
+    const s = await api('/api/v1/simulation/status');
+    applySimStatus(s);
+  } catch {
+    applySimStatus({ running: false, totalSent: 0, spikeActive: false });
+  }
+}
+
+function applySimStatus(s) {
+  // Header pill
+  const pill = document.getElementById('sim-pill');
+  const msgs = document.getElementById('sim-msgs');
+  if (s.running && s.spikeActive) {
+    pill.className = 'sim-pill spike'; pill.textContent = '⚡ SPIKE';
+  } else if (s.running) {
+    pill.className = 'sim-pill running'; pill.textContent = '● Running';
+  } else {
+    pill.className = 'sim-pill stopped'; pill.textContent = '● Stopped';
+  }
+  msgs.textContent = s.running ? `${Number(s.totalSent).toLocaleString()} msgs` : '';
+  msgs.style.display = s.running ? '' : 'none';
+
+  // Header buttons
+  setBtn('hdr-start', s.running);
+  setBtn('hdr-stop',  !s.running);
+
+  // Simulation tab buttons
+  setBtn('sim-start-btn', s.running);
+  setBtn('sim-stop-btn',  !s.running);
+
+  // Status rows in Simulation tab
+  const rows = document.getElementById('sim-stat-rows');
+  if (rows) rows.innerHTML = `
+    <div class="sim-row"><span>Status</span>
+      <span class="sim-val ${s.running ? 'sv-run' : 'sv-stop'}">${s.running ? '● Running' : '● Stopped'}</span></div>
+    <div class="sim-row"><span>Messages sent</span>
+      <span class="sim-val">${Number(s.totalSent || 0).toLocaleString()}</span></div>
+    <div class="sim-row"><span>Spike active</span>
+      <span class="sim-val ${s.spikeActive ? 'sv-spike' : ''}">${s.spikeActive ? '⚡ YES' : 'No'}</span></div>
+  `;
+
+  // Config rows + hint
+  const cfg = document.getElementById('sim-cfg-rows');
+  if (cfg && s.bootstrapServers !== undefined) {
+    const missing = !s.bootstrapServers;
+    cfg.innerHTML = `
+      <div class="sim-row"><span>Kafka bootstrap</span>
+        <span class="sim-val" style="font-family:var(--mono);font-size:12px">
+          ${missing ? '<em style="color:var(--red)">not configured</em>' : esc(s.bootstrapServers)}
+        </span></div>
+      <div class="sim-row"><span>Raw-logs topic</span>
+        <span class="sim-val" style="font-family:var(--mono);font-size:12px">${esc(s.topic || 'raw-logs')}</span></div>
+    `;
+    const hint = document.getElementById('sim-cfg-hint');
+    if (hint) hint.style.display = missing ? '' : 'none';
+  }
+}
+
+function setBtn(id, disabled) {
+  const el = document.getElementById(id);
+  if (el) el.disabled = disabled;
+}
+
+/* ── Start / Stop ────────────────────────────────────────────────────────── */
+async function startSim() {
+  setBtn('hdr-start', true); setBtn('sim-start-btn', true);
+  clearSimMsg();
+  try {
+    await api('/api/v1/simulation/start', { method: 'POST' });
+    toast('Simulation started!', 'ok');
+    await loadSimStatus();
+  } catch (e) {
+    const msg = tryParseError(e.message);
+    showSimMsg('err', msg);
+    toast('Failed: ' + msg, 'err');
+    await loadSimStatus();
+  }
+}
+
+async function stopSim() {
+  setBtn('hdr-stop', true); setBtn('sim-stop-btn', true);
+  try {
+    await api('/api/v1/simulation/stop', { method: 'POST' });
+    toast('Simulation stopped', 'info');
+    await loadSimStatus();
+    clearSimMsg();
+  } catch (e) {
+    toast('Stop failed: ' + e.message, 'err');
+    await loadSimStatus();
+  }
+}
+
+function showSimMsg(type, text) {
+  const el = document.getElementById('sim-msg');
+  if (el) el.innerHTML = `<div class="msg-box msg-${type}">${esc(text)}</div>`;
+}
+function clearSimMsg() {
+  const el = document.getElementById('sim-msg'); if (el) el.innerHTML = '';
+}
+function tryParseError(raw) {
+  try { const o = JSON.parse(raw); return o.error || raw; } catch { return raw; }
+}
+
+/* ── Dashboard ───────────────────────────────────────────────────────────── */
+async function loadDashboard() {
+  const grid = document.getElementById('metrics-grid');
+
+  // Skeleton placeholders while loading
+  if (!grid.children.length) {
+    grid.innerHTML = SERVICES.map(s => `
+      <div class="metric-card">
+        <div class="mc-head">${esc(s)}</div>
+        <div class="mc-row"><span class="mc-lbl">Msgs/sec</span><span class="mc-val" style="color:var(--muted)">—</span></div>
+        <div class="mc-row"><span class="mc-lbl">Error rate</span><span class="mc-val" style="color:var(--muted)">—</span></div>
+        <div class="mc-row"><span class="mc-lbl">Anomalies</span><span class="mc-val" style="color:var(--muted)">—</span></div>
+      </div>`).join('');
+  }
+
+  const results = await Promise.allSettled(
+    SERVICES.map(svc => api(`/api/v1/metrics/summary?service=${encodeURIComponent(svc)}`))
+  );
+
+  grid.innerHTML = '';
+  SERVICES.forEach((svc, i) => {
+    const res = results[i];
+    const card = document.createElement('div');
+    if (res.status === 'fulfilled') {
+      const m = res.value;
+      const errPct = (m.errorRate * 100).toFixed(1);
+      const errCls = m.errorRate > 0.15 ? 'val-err' : m.errorRate > 0.05 ? 'val-warn' : 'val-ok';
+      const isSpiking = m.errorRate > 0.3;
+      const cardCls = isSpiking ? 'spike' : m.errorRate > 0.1 ? 'warn' : '';
+      card.className = `metric-card ${cardCls}`.trim();
+      card.innerHTML = `
+        <div class="mc-head">
+          ${esc(svc)}
+          ${isSpiking ? '<span class="spike-tag">SPIKE</span>' : ''}
+        </div>
+        <div class="mc-row"><span class="mc-lbl">Msgs / sec</span>
+          <span class="mc-val">${Number(m.messagesPerSecond).toFixed(1)}</span></div>
+        <div class="mc-row"><span class="mc-lbl">Error rate</span>
+          <span class="mc-val ${errCls}">${errPct} %</span></div>
+        <div class="mc-row"><span class="mc-lbl">Anomalies</span>
+          <span class="mc-val ${m.anomalyCount > 0 ? 'val-err' : 'val-ok'}">${m.anomalyCount}</span></div>
+        <div class="mc-row"><span class="mc-lbl">Updated</span>
+          <span style="font-size:11px;color:var(--muted)" title="${fullTs(m.timestamp)}">${relTime(m.timestamp)}</span></div>
+      `;
+    } else {
+      card.className = 'metric-card';
+      card.innerHTML = `
+        <div class="mc-head">${esc(svc)}</div>
+        <div style="font-size:12px;color:var(--muted);padding:10px 0">No data yet</div>
+        <div style="font-size:11px;color:var(--muted)">Start simulation to generate metrics</div>
+      `;
+    }
+    grid.appendChild(card);
+  });
+
+  document.getElementById('metrics-ts').textContent = 'Updated ' + new Date().toLocaleTimeString();
+
+  // Recent alerts (top 5)
+  try {
+    const alerts = await api('/api/v1/alerts');
+    const el = document.getElementById('dash-alerts');
+    if (!alerts.length) {
+      el.innerHTML = '<div class="card" style="text-align:center;color:var(--muted);font-size:13px;padding:28px">No alerts — system healthy ✓</div>';
+    } else {
+      el.innerHTML = `<div class="alert-list">${alerts.slice(0, 5).map(renderAlert).join('')}</div>`;
+    }
+  } catch {
+    document.getElementById('dash-alerts').innerHTML = '<div style="color:var(--muted);font-size:13px">Could not load alerts.</div>';
+  }
+}
+
+/* ── Logs ────────────────────────────────────────────────────────────────── */
+async function loadLogs() {
+  const svc   = document.getElementById('log-svc').value;
+  const lvl   = document.getElementById('log-lvl').value;
+  const from  = document.getElementById('log-from').value;
+  const to    = document.getElementById('log-to').value;
+  const limit = document.getElementById('log-lim').value;
+
+  const p = new URLSearchParams({ limit });
+  if (svc)  p.set('service', svc);
+  if (from) p.set('from', new Date(from).toISOString());
+  if (to)   p.set('to',   new Date(to).toISOString());
+
+  const tbody = document.getElementById('logs-body');
+  tbody.innerHTML = '<tr><td colspan="6"><div class="empty"><p>Loading…</p></div></td></tr>';
+
+  try {
+    let logs = await api('/api/v1/logs?' + p.toString());
+    if (lvl) logs = logs.filter(l => l.level === lvl);   // client-side level filter
+
+    document.getElementById('logs-count').textContent =
+      logs.length ? `Showing ${logs.length} entr${logs.length === 1 ? 'y' : 'ies'}` : '';
+
+    if (!logs.length) {
+      tbody.innerHTML = '<tr><td colspan="6"><div class="empty"><div class="empty-icon">📋</div><p>No logs found for the selected filters.</p></div></td></tr>';
+      return;
+    }
+    tbody.innerHTML = logs.map(l => `
+      <tr>
+        <td class="td-ts" title="${esc(fullTs(l.timestamp))}">${relTime(l.timestamp)}</td>
+        <td><span class="badge b-info">${esc(l.service)}</span></td>
+        <td>${lvlBadge(l.level)}</td>
+        <td>${stsBadge(l.statusCode)}</td>
+        <td style="font-family:var(--mono);font-size:11px;color:var(--muted)">${esc(l.host)}</td>
+        <td class="td-msg" title="${esc(l.message)}">${esc(l.message)}</td>
+      </tr>`).join('');
+  } catch (e) {
+    tbody.innerHTML = `<tr><td colspan="6"><div class="empty" style="color:var(--red)">Error: ${esc(e.message)}</div></td></tr>`;
+  }
+}
+
+/* ── Alerts ──────────────────────────────────────────────────────────────── */
+async function loadAlerts() {
+  const svc = document.getElementById('alert-svc').value;
+  const qs  = svc ? `?service=${encodeURIComponent(svc)}` : '';
+  const list = document.getElementById('alerts-list');
+  list.innerHTML = '<div style="color:var(--muted);font-size:13px">Loading…</div>';
+
+  try {
+    const alerts = await api('/api/v1/alerts' + qs);
+    document.getElementById('alerts-count').textContent =
+      `${alerts.length} alert${alerts.length !== 1 ? 's' : ''}`;
+
+    if (!alerts.length) {
+      list.innerHTML = '<div class="card" style="text-align:center;color:var(--muted);font-size:13px;padding:32px">No alerts — system healthy ✓</div>';
+      return;
+    }
+    list.innerHTML = alerts.map(renderAlert).join('');
+  } catch (e) {
+    list.innerHTML = `<div style="color:var(--red);font-size:13px">Error loading alerts: ${esc(e.message)}</div>`;
+  }
+}
+
+function renderAlert(a) {
+  const sev = (a.severity || 'MEDIUM').toLowerCase();
+  const spike = Math.round(a.spikePercentage || 0);
+  return `
+    <div class="alert-card ${sev === 'critical' ? 'crit' : sev}">
+      <div class="ac-head">
+        ${sevBadge(a.severity)}
+        <strong style="font-size:14px">${esc(a.service)}</strong>
+        <span style="font-size:12px;color:var(--muted);margin-left:auto" title="${esc(fullTs(a.detectedAt))}">${relTime(a.detectedAt)}</span>
+      </div>
+      <div class="ac-body">
+        <span>Status: ${stsBadge(a.statusCode)}</span>
+        <span>Spike: <strong style="color:var(--red)">+${spike} %</strong></span>
+        <span>Rate: <strong>${Number(a.baselineRate || 0).toFixed(1)} → ${Number(a.currentRate || 0).toFixed(1)} req/min</strong></span>
+      </div>
+    </div>`;
+}
+
+/* ── Init ────────────────────────────────────────────────────────────────── */
+async function init() {
+  // Fetch service list from API
+  try {
+    SERVICES = await api('/api/v1/services');
+  } catch {
+    SERVICES = ['auth-service', 'checkout-service', 'payment-service', 'search-service', 'user-service'];
+  }
+
+  // Populate service dropdowns
+  ['log-svc', 'alert-svc'].forEach(id => {
+    const sel = document.getElementById(id);
+    sel.innerHTML = '<option value="">All services</option>';
+    SERVICES.forEach(s => {
+      const o = document.createElement('option');
+      o.value = s; o.textContent = s;
+      sel.appendChild(o);
+    });
+  });
+
+  // Default log time range: last 1 hour
+  const now  = new Date();
+  const from = new Date(now - 3_600_000);
+  document.getElementById('log-to').value   = now.toISOString().slice(0, 16);
+  document.getElementById('log-from').value = from.toISOString().slice(0, 16);
+
+  await refresh();
+  startCD();
+}
+
+document.addEventListener('DOMContentLoaded', init);
+</script>
+</body>
+</html>
