@@ -92,7 +92,7 @@ public final class MetricsAggregator implements AutoCloseable {
         log.info("MetricsAggregator started — flush interval {}s", flushIntervalSeconds);
     }
 
-    private void flush() {
+    void flush() {
         Instant now = Instant.now();
         for (Map.Entry<String, ServiceCounters> e : counters.entrySet()) {
             ServiceCounters c = e.getValue();

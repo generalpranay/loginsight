@@ -79,12 +79,11 @@ public final class IngestionApplication {
 
         AnomalyDetector detector = new AnomalyDetector(
             alert -> {
-                log.warn("ALERT: {}", alert.toSummary());
+                log.warn("ALERT: {}", (Object) alert.toSummary());
                 telemetry.recordAnomalyDetected(alert.service(), alert.statusCode());
                 aggregator.recordAnomaly(alert.service());
                 alertPublisher.publish(alert);
-            },
-            telemetry::resolveAnomaly
+            }
         );
 
         KafkaLogConsumer consumer = new KafkaLogConsumer(

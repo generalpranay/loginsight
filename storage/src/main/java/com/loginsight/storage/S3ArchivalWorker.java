@@ -76,6 +76,17 @@ public final class S3ArchivalWorker implements AutoCloseable {
         log.info("S3ArchivalWorker initialised: bucket={}", s3Bucket);
     }
 
+    /** Package-private constructor for unit tests — accepts pre-built collaborators. */
+    S3ArchivalWorker(ElasticsearchWriter esWriter, S3Client s3Client, String s3Bucket) {
+        this.esWriter  = Objects.requireNonNull(esWriter,  "esWriter");
+        this.s3Client  = Objects.requireNonNull(s3Client,  "s3Client");
+        this.s3Bucket  = Objects.requireNonNull(s3Bucket,  "s3Bucket");
+        this.mapper    = new ObjectMapper().registerModule(new JavaTimeModule());
+        this.scheduler = Executors.newSingleThreadScheduledExecutor(
+                Thread.ofVirtual().name("s3-archival").factory()
+        );
+    }
+
     /**
      * Schedules the archival job to run immediately on startup, then once every 24 hours.
      */
@@ -96,7 +107,7 @@ public final class S3ArchivalWorker implements AutoCloseable {
         s3Client.close();
     }
 
-    private void runArchivalCycle() {
+    void runArchivalCycle() {
         LocalDate today = LocalDate.now(ZoneOffset.UTC);
         log.info("Archival cycle started — cutoff date: {}", today.minusDays(ARCHIVAL_THRESHOLD_DAYS));
 

@@ -66,6 +66,18 @@ public final class KafkaLogConsumer implements AutoCloseable {
         this.consumer   = new KafkaConsumer<>(buildConsumerProps());
     }
 
+    /** Package-private constructor for unit tests — accepts a pre-built consumer. */
+    KafkaLogConsumer(KafkaConsumer<String, String> consumer,
+                     Consumer<List<LogEntry>> downstream,
+                     TelemetryConfig telemetry,
+                     String topic) {
+        this.downstream = Objects.requireNonNull(downstream, "downstream");
+        this.telemetry  = Objects.requireNonNull(telemetry,  "telemetry");
+        this.topic      = Objects.requireNonNull(topic,      "topic");
+        this.mapper     = new ObjectMapper().registerModule(new JavaTimeModule());
+        this.consumer   = Objects.requireNonNull(consumer,   "consumer");
+    }
+
     /**
      * Subscribes to the configured topic and starts the poll loop on a new virtual thread.
      * Returns immediately; use {@link #awaitShutdown()} to block until the loop stops.

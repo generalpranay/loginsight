@@ -11,6 +11,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.time.Duration;
+import java.util.Objects;
 import java.util.Properties;
 import java.util.UUID;
 
@@ -59,6 +60,13 @@ public final class AlertPublisher implements AutoCloseable {
 
         this.producer = new KafkaProducer<>(p);
         log.info("AlertPublisher ready — topic='{}'", topic);
+    }
+
+    /** Package-private constructor for unit tests — accepts a pre-built producer. */
+    AlertPublisher(KafkaProducer<String, String> producer, String topic) {
+        this.producer = Objects.requireNonNull(producer, "producer");
+        this.topic    = Objects.requireNonNull(topic,    "topic");
+        this.mapper   = new ObjectMapper().registerModule(new JavaTimeModule());
     }
 
     /**

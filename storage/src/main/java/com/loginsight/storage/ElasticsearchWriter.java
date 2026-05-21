@@ -85,6 +85,13 @@ public final class ElasticsearchWriter implements AutoCloseable {
         log.info("ElasticsearchWriter connected to {} (auth={})", url, user != null && !user.isBlank());
     }
 
+    /** Package-private constructor for unit tests — accepts a pre-built client. */
+    ElasticsearchWriter(ElasticsearchClient client) {
+        this.client     = Objects.requireNonNull(client, "client");
+        this.restClient = null;
+        this.enabled    = true;
+    }
+
     /**
      * Bulk-indexes a batch of log entries. Failures on individual documents are logged
      * and counted but do not abort the remaining documents in the batch.
@@ -217,7 +224,7 @@ public final class ElasticsearchWriter implements AutoCloseable {
         if (restClient != null) restClient.close();
     }
 
-    private static String indexName(LogEntry entry) {
+    static String indexName(LogEntry entry) {
         LocalDate date = entry.timestamp().atZone(ZoneOffset.UTC).toLocalDate();
         return "logs-" + INDEX_DATE_FMT.format(date);
     }
