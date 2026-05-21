@@ -28,6 +28,14 @@ import java.util.UUID;
  * <table border="1">
  *   <tr><th>Method + Path</th><th>Description</th><th>Key params</th></tr>
  *   <tr>
+ *     <td>{@code POST /api/v1/logs}</td>
+ *     <td>Ingest a single log event; publishes to the raw-logs Kafka topic so it flows
+ *         through the full pipeline (anomaly detection, metrics, Elasticsearch)</td>
+ *     <td>{@code service} (required), {@code message} (required, max 2000 chars),
+ *         {@code level} (INFO/WARN/ERROR), {@code statusCode} (100–599),
+ *         {@code host}, {@code tags}</td>
+ *   </tr>
+ *   <tr>
  *     <td>{@code GET /api/v1/logs}</td>
  *     <td>Paged log entries from Elasticsearch, newest-first</td>
  *     <td>{@code service}, {@code from} (ISO-8601), {@code to} (ISO-8601), {@code limit} (max 1000)</td>
@@ -71,11 +79,14 @@ public class LogIngestionController {
     private final LogQueryService logQueryService;
     private final AlertSubscriber alertSubscriber;
     private final LogBuffer logBuffer;
+    private final RawLogPublisher rawLogPublisher;
 
-    public LogIngestionController(LogQueryService logQueryService, AlertSubscriber alertSubscriber, LogBuffer logBuffer) {
-        this.logQueryService = logQueryService;
-        this.alertSubscriber = alertSubscriber;
-        this.logBuffer       = logBuffer;
+    public LogIngestionController(LogQueryService logQueryService, AlertSubscriber alertSubscriber,
+                                  LogBuffer logBuffer, RawLogPublisher rawLogPublisher) {
+        this.logQueryService  = logQueryService;
+        this.alertSubscriber  = alertSubscriber;
+        this.logBuffer        = logBuffer;
+        this.rawLogPublisher  = rawLogPublisher;
     }
 
     /** Request body for manual log submission. */
@@ -110,6 +121,7 @@ public class LogIngestionController {
                 req.tags() != null ? req.tags() : Map.of());
 
         logBuffer.add(entry);
+        rawLogPublisher.publish(entry);
         log.info("Manual log entry submitted: service={} level={} status={}", entry.service(), entry.level(), entry.statusCode());
         return ResponseEntity.status(HttpStatus.CREATED).body(entry);
     }
