@@ -8,8 +8,10 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Stream;
 
 /**
@@ -22,14 +24,19 @@ public class LogQueryService {
 
     private static final Logger log = LoggerFactory.getLogger(LogQueryService.class);
 
+    private static final Duration METRIC_CACHE_TTL = Duration.ofSeconds(10);
+
+    private record CachedSnapshot(MetricSnapshot snapshot, Instant cachedAt) {}
+
     private final ElasticsearchWriter esWriter;
     private final InfluxDbWriter influxWriter;
     private final LogBuffer logBuffer;
+    private final ConcurrentHashMap<String, CachedSnapshot> snapshotCache = new ConcurrentHashMap<>();
 
     public LogQueryService(ElasticsearchWriter esWriter, InfluxDbWriter influxWriter, LogBuffer logBuffer) {
-        this.esWriter   = esWriter;
+        this.esWriter     = esWriter;
         this.influxWriter = influxWriter;
-        this.logBuffer  = logBuffer;
+        this.logBuffer    = logBuffer;
     }
 
     /**
@@ -71,11 +78,19 @@ public class LogQueryService {
     }
 
     public MetricSnapshot getLatestMetricSnapshot(String service) {
+        CachedSnapshot cached = snapshotCache.get(service);
+        if (cached != null && Instant.now().isBefore(cached.cachedAt().plus(METRIC_CACHE_TTL))) {
+            return cached.snapshot();
+        }
         try {
-            return influxWriter.queryLatest(service);
+            MetricSnapshot snapshot = influxWriter.queryLatest(service);
+            if (snapshot != null) {
+                snapshotCache.put(service, new CachedSnapshot(snapshot, Instant.now()));
+            }
+            return snapshot;
         } catch (Exception e) {
             log.error("InfluxDB query failed service={}: {}", service, e.getMessage());
-            return null;
+            return cached != null ? cached.snapshot() : null;
         }
     }
 }

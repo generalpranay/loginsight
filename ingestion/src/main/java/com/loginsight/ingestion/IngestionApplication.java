@@ -77,12 +77,15 @@ public final class IngestionApplication {
         S3ArchivalWorker   archivalWorker = new S3ArchivalWorker(esWriter);
         AlertPublisher     alertPublisher = new AlertPublisher();
 
-        AnomalyDetector detector = new AnomalyDetector(alert -> {
-            log.warn("ALERT: {}", alert.toSummary());
-            telemetry.recordAnomalyDetected(alert.service(), alert.statusCode());
-            aggregator.recordAnomaly(alert.service());
-            alertPublisher.publish(alert);
-        });
+        AnomalyDetector detector = new AnomalyDetector(
+            alert -> {
+                log.warn("ALERT: {}", alert.toSummary());
+                telemetry.recordAnomalyDetected(alert.service(), alert.statusCode());
+                aggregator.recordAnomaly(alert.service());
+                alertPublisher.publish(alert);
+            },
+            telemetry::resolveAnomaly
+        );
 
         KafkaLogConsumer consumer = new KafkaLogConsumer(
                 (List<LogEntry> batch) -> {

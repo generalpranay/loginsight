@@ -45,15 +45,25 @@ public final class AnomalyDetector {
     private static final int    MIN_BASELINE_EVENTS = 5;
 
     private final Consumer<AlertEvent> alertSink;
-    private final Map<WindowKey, SlidingWindow> windows  = new ConcurrentHashMap<>();
-    private final List<AlertEvent>              alerts   = new CopyOnWriteArrayList<>();
+    private final Runnable             resolveSink;
+    private final Map<WindowKey, SlidingWindow> windows          = new ConcurrentHashMap<>();
+    private final List<AlertEvent>              alerts           = new CopyOnWriteArrayList<>();
+    private final Set<WindowKey>                activeAnomalyKeys = ConcurrentHashMap.newKeySet();
 
     /**
-     * @param alertSink receives every newly-fired {@link AlertEvent}; called synchronously on the ingesting thread.
-     *                  Telemetry recording is the caller's responsibility — wire it inside the sink lambda.
+     * @param alertSink   receives every newly-fired {@link AlertEvent}; called synchronously on the ingesting thread.
+     *                    Telemetry recording is the caller's responsibility.
+     * @param resolveSink called when a (service, statusCode) pair that was previously spiking drops
+     *                    back below the threshold — use this to decrement an active-anomaly gauge.
      */
+    public AnomalyDetector(Consumer<AlertEvent> alertSink, Runnable resolveSink) {
+        this.alertSink   = Objects.requireNonNull(alertSink,   "alertSink");
+        this.resolveSink = Objects.requireNonNull(resolveSink, "resolveSink");
+    }
+
+    /** Convenience constructor for callers that do not need resolution callbacks. */
     public AnomalyDetector(Consumer<AlertEvent> alertSink) {
-        this.alertSink = Objects.requireNonNull(alertSink, "alertSink");
+        this(alertSink, () -> {});
     }
 
     /**
@@ -95,12 +105,14 @@ public final class AnomalyDetector {
             }
         }
 
-        if (filledSlots == 0 || baselineTotal < MIN_BASELINE_EVENTS) return;
+        boolean hasBaseline = filledSlots > 0 && baselineTotal >= MIN_BASELINE_EVENTS;
+        if (!hasBaseline) return;
 
         double baselineRate = (double) baselineTotal / filledSlots;
         double currentRate  = currentCount;
 
         if (currentRate >= baselineRate * SPIKE_MULTIPLIER) {
+            activeAnomalyKeys.add(key);
             double spikePct  = ((currentRate - baselineRate) / baselineRate) * 100.0;
             Severity severity = spikePct >= 1_000.0 ? Severity.CRITICAL : Severity.WARNING;
 
@@ -118,6 +130,9 @@ public final class AnomalyDetector {
             alerts.add(alert);
             alertSink.accept(alert);
             log.warn("ANOMALY: {}", alert.toSummary());
+        } else if (activeAnomalyKeys.remove(key)) {
+            resolveSink.run();
+            log.info("RESOLVED: anomaly cleared for service={} statusCode={}", key.service(), key.statusCode());
         }
     }
 
