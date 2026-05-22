@@ -93,6 +93,23 @@ send_entry() {
     -d "{\"service\":\"$svc\",\"level\":\"$level\",\"statusCode\":$status,\"message\":\"$msg\"}"
 }
 
+# ── Input validation ──────────────────────────────────────────────────────────
+if [[ -n "$FIX_SERVICE" ]] && [[ ! "$FIX_SERVICE" =~ ^[a-zA-Z0-9._-]{1,64}$ ]]; then
+  echo "ERROR: --service must match ^[a-zA-Z0-9._-]{1,64}$" >&2; exit 1
+fi
+if [[ -n "$FIX_LEVEL" ]] && [[ ! "$FIX_LEVEL" =~ ^(INFO|WARN|ERROR)$ ]]; then
+  echo "ERROR: --level must be INFO, WARN, or ERROR" >&2; exit 1
+fi
+if [[ -n "$FIX_STATUS" ]] && [[ ! "$FIX_STATUS" =~ ^[1-5][0-9]{2}$ ]]; then
+  echo "ERROR: --status must be a valid 3-digit HTTP status code (100-599)" >&2; exit 1
+fi
+if [[ ! "$COUNT" =~ ^[0-9]+$ ]] || [[ "$COUNT" -lt 1 ]]; then
+  echo "ERROR: --count must be a positive integer" >&2; exit 1
+fi
+if [[ ! "$RATE" =~ ^[0-9]+$ ]] || [[ "$RATE" -lt 1 ]]; then
+  echo "ERROR: --rate must be a positive integer" >&2; exit 1
+fi
+
 # ── Pre-flight check ──────────────────────────────────────────────────────────
 HEALTH=$(curl -s -o /dev/null -w "%{http_code}" "$API_URL/api/v1/health" 2>/dev/null || echo "000")
 if [[ "$HEALTH" != "200" ]]; then

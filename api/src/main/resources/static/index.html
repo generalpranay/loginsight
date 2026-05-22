@@ -379,10 +379,14 @@
     <div class="card" style="margin-top:16px;max-width:840px">
       <div style="font-size:14px;font-weight:600;margin-bottom:12px">Configuration</div>
       <div id="sim-cfg-rows"></div>
+      <div class="sim-row">
+        <span style="color:var(--muted);font-size:13px">Simulation API key</span>
+        <button class="btn-ghost" style="font-size:11px;padding:4px 10px" onclick="setSimKey()">🔑 Set key</button>
+      </div>
       <div id="sim-cfg-hint" style="display:none;margin-top:12px" class="msg-box msg-info">
         Kafka bootstrap servers are not configured — start button will be disabled.
         Set <code style="background:rgba(0,0,0,.2);padding:2px 6px;border-radius:4px">LOGINSIGHT_KAFKA_BOOTSTRAP_SERVERS</code>
-        and restart the API, or use <code style="background:rgba(0,0,0,.2);padding:2px 6px;border-radius:4px">.\run-api.ps1</code> which sets it automatically.
+        and restart the API.
       </div>
     </div>
   </div>
@@ -403,7 +407,10 @@ let cdTimer = null;
 
 /* ── Utility ─────────────────────────────────────────────────────────────── */
 async function api(path, opts = {}) {
-  const r = await fetch(path, { headers: { Accept: 'application/json' }, ...opts });
+  const simKey = sessionStorage.getItem('sim-key') || '';
+  const baseHeaders = { Accept: 'application/json' };
+  if (simKey) baseHeaders['X-Simulation-Key'] = simKey;
+  const r = await fetch(path, { ...opts, headers: { ...baseHeaders, ...opts.headers } });
   if (!r.ok) {
     const body = await r.text().catch(() => '');
     throw new Error(body || `HTTP ${r.status}`);
@@ -566,18 +573,17 @@ function applySimStatus(s) {
 
   // Config rows + hint
   const cfg = document.getElementById('sim-cfg-rows');
-  if (cfg && s.bootstrapServers !== undefined) {
-    const missing = !s.bootstrapServers;
+  if (cfg && s.bootstrapConfigured !== undefined) {
     cfg.innerHTML = `
       <div class="sim-row"><span>Kafka bootstrap</span>
         <span class="sim-val" style="font-family:var(--mono);font-size:12px">
-          ${missing ? '<em style="color:var(--red)">not configured</em>' : esc(s.bootstrapServers)}
+          ${s.bootstrapConfigured ? '<span style="color:var(--green)">✓ Configured</span>' : '<em style="color:var(--red)">not configured</em>'}
         </span></div>
       <div class="sim-row"><span>Raw-logs topic</span>
         <span class="sim-val" style="font-family:var(--mono);font-size:12px">${esc(s.topic || 'raw-logs')}</span></div>
     `;
     const hint = document.getElementById('sim-cfg-hint');
-    if (hint) hint.style.display = missing ? '' : 'none';
+    if (hint) hint.style.display = s.bootstrapConfigured ? 'none' : '';
   }
 }
 
@@ -596,7 +602,11 @@ async function startSim() {
     await loadSimStatus();
   } catch (e) {
     const msg = tryParseError(e.message);
-    showSimMsg('err', msg);
+    if (e.message.includes('401')) {
+      showSimMsg('err', 'Unauthorized — set your simulation API key (🔑 Set key button below).');
+    } else {
+      showSimMsg('err', msg);
+    }
     toast('Failed: ' + msg, 'err');
     await loadSimStatus();
   }
@@ -624,6 +634,19 @@ function clearSimMsg() {
 }
 function tryParseError(raw) {
   try { const o = JSON.parse(raw); return o.error || raw; } catch { return raw; }
+}
+
+function setSimKey() {
+  const current = sessionStorage.getItem('sim-key') ? '(key is set)' : '(no key stored)';
+  const key = prompt(`Enter simulation API key ${current}\nLeave blank to clear the stored key:`);
+  if (key === null) return;
+  if (key === '') {
+    sessionStorage.removeItem('sim-key');
+    toast('Simulation API key cleared', 'info');
+  } else {
+    sessionStorage.setItem('sim-key', key);
+    toast('Simulation API key saved (session only)', 'ok');
+  }
 }
 
 /* ── Dashboard ───────────────────────────────────────────────────────────── */

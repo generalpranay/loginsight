@@ -106,6 +106,18 @@ public class LogIngestionController {
             return ResponseEntity.badRequest().body(Map.of("error", "message must not be blank"));
         if (req.message().length() > 2_000)
             return ResponseEntity.badRequest().body(Map.of("error", "message too long (max 2000 chars)"));
+        if (req.host() != null && req.host().length() > 253)
+            return ResponseEntity.badRequest().body(Map.of("error", "host too long (max 253 chars)"));
+        if (req.tags() != null) {
+            if (req.tags().size() > 20)
+                return ResponseEntity.badRequest().body(Map.of("error", "too many tags (max 20)"));
+            for (Map.Entry<String, String> tag : req.tags().entrySet()) {
+                if (tag.getKey() == null || tag.getKey().isBlank() || tag.getKey().length() > 64)
+                    return ResponseEntity.badRequest().body(Map.of("error", "tag key must be 1–64 chars"));
+                if (tag.getValue() != null && tag.getValue().length() > 256)
+                    return ResponseEntity.badRequest().body(Map.of("error", "tag value too long (max 256 chars)"));
+            }
+        }
 
         String level  = req.level() != null && VALID_LEVELS.contains(req.level().toUpperCase())
                         ? req.level().toUpperCase() : "INFO";

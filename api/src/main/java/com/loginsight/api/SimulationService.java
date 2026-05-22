@@ -52,12 +52,12 @@ public class SimulationService {
     public Map<String, Object> getStatus() {
         boolean running = simulator != null && simulator.isRunning();
         return Map.of(
-            "running",            running,
-            "totalSent",          simulator != null ? simulator.getTotalSent() : 0L,
-            "spikeActive",        simulator != null && simulator.isSpikeActive(),
-            "nextSpikeInSeconds", simulator != null ? simulator.getNextSpikeInSeconds() : -1L,
-            "bootstrapServers",   bootstrapServers != null ? bootstrapServers : "",
-            "topic",              rawTopic != null ? rawTopic : "raw-logs"
+            "running",              running,
+            "totalSent",            simulator != null ? simulator.getTotalSent() : 0L,
+            "spikeActive",          simulator != null && simulator.isSpikeActive(),
+            "nextSpikeInSeconds",   simulator != null ? simulator.getNextSpikeInSeconds() : -1L,
+            "bootstrapConfigured",  bootstrapServers != null && !bootstrapServers.isBlank(),
+            "topic",                rawTopic != null ? rawTopic : "raw-logs"
         );
     }
 
