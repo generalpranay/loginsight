@@ -95,6 +95,7 @@ public final class LogSimulator {
     private final Random rng = new Random();
     private final AtomicLong totalSent = new AtomicLong();
     private volatile boolean spikeActive = false;
+    private volatile boolean spikeEnabled = true;
     private volatile ScheduledExecutorService scheduler;
     private volatile boolean running = false;
     private volatile Instant startedAt;
@@ -108,17 +109,56 @@ public final class LogSimulator {
 
     // ── Lifecycle ─────────────────────────────────────────────────────────────
 
+    /**
+     * Standalone entry point.
+     *
+     * <pre>
+     * Environment variables (always respected):
+     *   KAFKA_BOOTSTRAP_SERVERS  default: localhost:9092
+     *   KAFKA_TOPIC              default: raw-logs
+     *
+     * CLI flags:
+     *   --count N    Send exactly N messages then exit cleanly. Omit for continuous mode.
+     *   --no-spike   Suppress the periodic error-spike pattern (useful for baseline load tests).
+     * </pre>
+     */
     public static void main(String[] args) throws InterruptedException {
         String bootstrap = System.getenv().getOrDefault("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092");
         String topic     = System.getenv().getOrDefault("KAFKA_TOPIC", "raw-logs");
-        log.info("LogSimulator starting — broker={} topic={}", bootstrap, topic);
+
+        long count    = 0;       // 0 = run until SIGTERM
+        boolean noSpike = false;
+
+        for (int i = 0; i < args.length; i++) {
+            switch (args[i]) {
+                case "--count"    -> count    = Long.parseLong(args[++i]);
+                case "--no-spike" -> noSpike  = true;
+                default           -> log.warn("Unknown arg ignored: {}", args[i]);
+            }
+        }
+
+        log.info("LogSimulator starting — broker={} topic={} count={} spike={}",
+                bootstrap, topic, count > 0 ? count : "unlimited", !noSpike);
+
         LogSimulator sim = new LogSimulator(bootstrap);
+        if (noSpike) sim.disableSpike();
+
         Runtime.getRuntime().addShutdownHook(Thread.ofVirtual().unstarted(() -> {
             log.info("Shutting down simulator — total sent: {}", sim.getTotalSent());
             sim.stop();
         }));
+
         sim.start(topic);
-        Thread.currentThread().join(); // block until SIGTERM
+
+        if (count > 0) {
+            while (sim.getTotalSent() < count) {
+                Thread.sleep(100);
+            }
+            log.info("Target count {} reached — stopping", count);
+            sim.stop();
+        } else {
+            Thread.currentThread().join(); // block until SIGTERM
+        }
     }
 
     public LogSimulator(String bootstrapServers) {
@@ -156,10 +196,12 @@ public final class LogSimulator {
             );
         }
 
-        scheduler.scheduleAtFixedRate(
-                () -> runSpike(topic),
-                SPIKE_INITIAL_DELAY_SEC, SPIKE_INTERVAL_SEC, TimeUnit.SECONDS
-        );
+        if (spikeEnabled) {
+            scheduler.scheduleAtFixedRate(
+                    () -> runSpike(topic),
+                    SPIKE_INITIAL_DELAY_SEC, SPIKE_INTERVAL_SEC, TimeUnit.SECONDS
+            );
+        }
 
         scheduler.scheduleAtFixedRate(
                 () -> log.info("--- Simulator stats: total_sent={} spike_active={}", totalSent.get(), spikeActive),
@@ -191,6 +233,9 @@ public final class LogSimulator {
     public boolean isRunning()     { return running; }
     public long    getTotalSent()  { return totalSent.get(); }
     public boolean isSpikeActive() { return spikeActive; }
+
+    /** Disables the periodic error-spike pattern. Must be called before {@link #start(String)}. */
+    public void disableSpike()     { this.spikeEnabled = false; }
 
     /** Seconds until the next spike, or -1 if stopped / spike currently active. */
     public long getNextSpikeInSeconds() {
