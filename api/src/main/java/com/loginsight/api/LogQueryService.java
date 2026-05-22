@@ -4,6 +4,7 @@ import com.loginsight.common.LogEntry;
 import com.loginsight.common.MetricSnapshot;
 import com.loginsight.storage.ElasticsearchWriter;
 import com.loginsight.storage.InfluxDbWriter;
+import com.loginsight.storage.MetricsAggregator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -31,12 +32,15 @@ public class LogQueryService {
     private final ElasticsearchWriter esWriter;
     private final InfluxDbWriter influxWriter;
     private final LogBuffer logBuffer;
+    private final MetricsAggregator metricsAggregator;
     private final ConcurrentHashMap<String, CachedSnapshot> snapshotCache = new ConcurrentHashMap<>();
 
-    public LogQueryService(ElasticsearchWriter esWriter, InfluxDbWriter influxWriter, LogBuffer logBuffer) {
-        this.esWriter     = esWriter;
-        this.influxWriter = influxWriter;
-        this.logBuffer    = logBuffer;
+    public LogQueryService(ElasticsearchWriter esWriter, InfluxDbWriter influxWriter,
+                           LogBuffer logBuffer, MetricsAggregator metricsAggregator) {
+        this.esWriter          = esWriter;
+        this.influxWriter      = influxWriter;
+        this.logBuffer         = logBuffer;
+        this.metricsAggregator = metricsAggregator;
     }
 
     /**
@@ -86,11 +90,13 @@ public class LogQueryService {
             MetricSnapshot snapshot = influxWriter.queryLatest(service);
             if (snapshot != null) {
                 snapshotCache.put(service, new CachedSnapshot(snapshot, Instant.now()));
+                return snapshot;
             }
-            return snapshot;
         } catch (Exception e) {
             log.error("InfluxDB query failed service={}: {}", service, e.getMessage());
-            return cached != null ? cached.snapshot() : null;
+            if (cached != null) return cached.snapshot();
         }
+        // Fall back to in-process aggregator when InfluxDB is not configured or unavailable
+        return metricsAggregator.getLatestSnapshot(service);
     }
 }

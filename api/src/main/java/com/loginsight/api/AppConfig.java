@@ -2,6 +2,7 @@ package com.loginsight.api;
 
 import com.loginsight.storage.ElasticsearchWriter;
 import com.loginsight.storage.InfluxDbWriter;
+import com.loginsight.storage.MetricsAggregator;
 import com.loginsight.telemetry.TelemetryConfig;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
@@ -53,6 +54,9 @@ public class AppConfig {
     @Value("${loginsight.cors.allowed-origins:}")
     private String corsAllowedOrigins;
 
+    @Value("${loginsight.metrics.flush-interval-seconds:10}")
+    private long metricsFlushIntervalSeconds;
+
     @Bean(destroyMethod = "close")
     public TelemetryConfig telemetryConfig() {
         return TelemetryConfig.initialize();
@@ -66,6 +70,11 @@ public class AppConfig {
     @Bean(destroyMethod = "close")
     public InfluxDbWriter influxDbWriter() {
         return new InfluxDbWriter(influxDbUrl, influxDbToken, influxDbOrg, influxDbBucket);
+    }
+
+    @Bean
+    public MetricsAggregator metricsAggregator() {
+        return new MetricsAggregator(influxDbWriter(), metricsFlushIntervalSeconds);
     }
 
     /**

@@ -120,6 +120,12 @@ public class AlertSubscriber {
                 .toList();
     }
 
+    /** Injects an alert fired by the in-process anomaly detector directly into the cache. */
+    public void addAlert(AlertEvent alert) {
+        recent.addFirst(alert);
+        while (recent.size() > MAX_CACHED_ALERTS) recent.pollLast();
+    }
+
     @PreDestroy
     public void stop() {
         running.set(false);

@@ -47,6 +47,7 @@ public final class MetricsAggregator implements AutoCloseable {
     private final long flushIntervalSeconds;
     private final ScheduledExecutorService scheduler;
     private final Map<String, ServiceCounters> counters = new ConcurrentHashMap<>();
+    private final Map<String, MetricSnapshot> latestSnapshots = new ConcurrentHashMap<>();
 
     public MetricsAggregator(InfluxDbWriter writer, long flushIntervalSeconds) {
         this.writer = Objects.requireNonNull(writer, "writer");
@@ -83,6 +84,11 @@ public final class MetricsAggregator implements AutoCloseable {
         counters.computeIfAbsent(service, k -> new ServiceCounters()).anomalies.increment();
     }
 
+    /** Returns the most-recently flushed snapshot for {@code service}, or {@code null} if none yet. */
+    public MetricSnapshot getLatestSnapshot(String service) {
+        return latestSnapshots.get(service);
+    }
+
     /**
      * Starts the background flush job on a single virtual thread.
      * Must be called once after construction; calling multiple times is undefined.
@@ -104,8 +110,10 @@ public final class MetricsAggregator implements AutoCloseable {
             double mps       = (double) total / flushIntervalSeconds;
             double errorRate = total > 0 ? Math.min(1.0, (double) errors / total) : 0.0;
 
+            MetricSnapshot snap = new MetricSnapshot(e.getKey(), mps, errorRate, anomalies, now);
+            latestSnapshots.put(e.getKey(), snap);
             try {
-                writer.write(new MetricSnapshot(e.getKey(), mps, errorRate, anomalies, now));
+                writer.write(snap);
             } catch (Exception ex) {
                 log.warn("InfluxDB write failed for service={}: {}", e.getKey(), ex.getMessage());
             }
