@@ -11,7 +11,8 @@ fullnameOverride: ""
 serviceAccount:
   create: true
   annotations:
-    # IRSA: allows the pod to assume the IAM role for MSK + S3 access
+    # Set to the `workload_iam_role_arn` Terraform output before deploying.
+    # terraform output -raw workload_iam_role_arn
     eks.amazonaws.com/role-arn: ""
   name: ""
 
