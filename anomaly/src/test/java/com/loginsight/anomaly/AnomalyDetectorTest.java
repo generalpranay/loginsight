@@ -32,12 +32,25 @@ class AnomalyDetectorTest {
     }
 
     @Test
-    void doesNotFireWithoutBaseline() {
-        // Even 100 errors in the current bucket alone shouldn't fire — baseline empty
+    void doesNotFireBelowColdStartFloor() {
+        // 30 errors with no baseline is below the cold-start floor (50) — stay silent.
+        for (int i = 0; i < 30; i++) {
+            detector.ingest(entry("svc", 500, Instant.now()));
+        }
+        assertTrue(sink.isEmpty(), "below cold-start floor should not fire without baseline");
+    }
+
+    @Test
+    void firesOnColdStartAboveFloor() {
+        // 100 errors with no baseline exceeds the cold-start floor — must fire so the very
+        // first spike after startup isn't silently swallowed by the baseline check.
         for (int i = 0; i < 100; i++) {
             detector.ingest(entry("svc", 500, Instant.now()));
         }
-        assertTrue(sink.isEmpty(), "should not fire without baseline data");
+        assertFalse(sink.isEmpty(), "above cold-start floor should fire even without baseline");
+        AlertEvent a = sink.get(sink.size() - 1);
+        assertEquals("svc", a.service());
+        assertEquals(500,    a.statusCode());
     }
 
     @Test
@@ -84,10 +97,11 @@ class AnomalyDetectorTest {
             detector.ingest(entry("svc-a", 500, Instant.ofEpochMilli(t)));
             detector.ingest(entry("svc-a", 500, Instant.ofEpochMilli(t + 1)));
         }
-        for (int i = 0; i < 50; i++) {
+        // 30 events for svc-b: no baseline AND below the cold-start floor — must not fire,
+        // and svc-a's window must remain untouched by svc-b's traffic.
+        for (int i = 0; i < 30; i++) {
             detector.ingest(entry("svc-b", 500, Instant.now()));
         }
-        // svc-b had no baseline; svc-a's window untouched by svc-b
         assertTrue(sink.isEmpty());
     }
 

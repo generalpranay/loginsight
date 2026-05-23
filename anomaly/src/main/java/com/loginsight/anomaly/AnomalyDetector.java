@@ -20,13 +20,20 @@ import java.util.function.Consumer;
  * evaluates the spike condition:
  *
  * <pre>
- *   currentBucket  >=  avg(prior 4 buckets)  *  6.0   →  alert
+ *   currentBucket  >=  avg(prior 4 buckets, excluding tainted)  *  6.0   →  alert
  * </pre>
  *
- * <p>The multiplier of 6.0 means the current minute must contain at least 500 % more events
- * than the baseline average before an alert fires. At least {@value MIN_BASELINE_EVENTS}
- * baseline events must exist across the prior four buckets to suppress false positives at
- * startup or after extended quiet periods.
+ * <p>Two safety nets keep this from silently swallowing real spikes:
+ *
+ * <ul>
+ *   <li><b>Cold-start floor</b> — when no usable baseline exists yet (first minutes after
+ *       startup, or after a long quiet period) the detector fires anyway if the current bucket
+ *       alone exceeds {@value #COLD_START_FLOOR} error events. This catches the first spike,
+ *       which would otherwise be lost to the baseline check.</li>
+ *   <li><b>Tainted-bucket exclusion</b> — once a bucket fires an anomaly it is marked tainted
+ *       and excluded from future baseline calculations. Without this, a prior spike's events
+ *       sit in the rolling window and inflate the baseline, suppressing the next spike.</li>
+ * </ul>
  *
  * <p>Thread-safe: designed for concurrent ingestion from multiple virtual threads.
  *
@@ -43,6 +50,12 @@ public final class AnomalyDetector {
     private static final long   BUCKET_WIDTH_MS   = 60_000L;
     /** Minimum total events in the baseline slots before the rule can fire. */
     private static final int    MIN_BASELINE_EVENTS = 5;
+    /** Absolute event count that triggers a cold-start alert when no usable baseline exists yet.
+     *  Prevents the first spike after startup from being silently suppressed. */
+    private static final long   COLD_START_FLOOR  = 50;
+    /** Log a suppression line when the current bucket has at least this many events but the
+     *  spike condition still isn't met — makes "near-miss" spikes visible in the console. */
+    private static final long   INTERESTING_CURRENT_COUNT = 20;
 
     private final Consumer<AlertEvent> alertSink;
     private final Runnable             resolveSink;
@@ -92,13 +105,18 @@ public final class AnomalyDetector {
     }
 
     private void evaluate(WindowKey key, SlidingWindow window) {
-        long[] buckets = window.snapshot(System.currentTimeMillis());
+        long now = System.currentTimeMillis();
+        SlidingWindow.Snapshot snap = window.snapshot(now);
+        long[]    buckets = snap.counts();
+        boolean[] tainted = snap.tainted();
 
-        long currentCount  = buckets[WINDOW_SLOTS - 1];
-        long baselineTotal = 0;
-        int  filledSlots   = 0;
+        long currentCount    = buckets[WINDOW_SLOTS - 1];
+        long baselineTotal   = 0;
+        int  filledSlots     = 0;
+        int  excludedTainted = 0;
 
         for (int i = 0; i < WINDOW_SLOTS - 1; i++) {
+            if (tainted[i]) { excludedTainted++; continue; }
             if (buckets[i] > 0) {
                 baselineTotal += buckets[i];
                 filledSlots++;
@@ -106,34 +124,60 @@ public final class AnomalyDetector {
         }
 
         boolean hasBaseline = filledSlots > 0 && baselineTotal >= MIN_BASELINE_EVENTS;
-        if (!hasBaseline) return;
+
+        if (!hasBaseline) {
+            if (currentCount >= COLD_START_FLOOR) {
+                double syntheticBaseline = (double) COLD_START_FLOOR;
+                double spikePct = ((currentCount - syntheticBaseline) / syntheticBaseline) * 100.0;
+                window.taintCurrent(now);
+                fireAlert(key, syntheticBaseline, currentCount, spikePct);
+                return;
+            }
+            if (currentCount >= INTERESTING_CURRENT_COUNT && window.markSuppressionLog(now)) {
+                log.info("Suppressed (no baseline): service={} statusCode={} currentCount={} coldStartFloor={} excludedTaintedBuckets={}",
+                        key.service(), key.statusCode(), currentCount, COLD_START_FLOOR, excludedTainted);
+            }
+            return;
+        }
 
         double baselineRate = (double) baselineTotal / filledSlots;
         double currentRate  = currentCount;
+        double threshold    = baselineRate * SPIKE_MULTIPLIER;
 
-        if (currentRate >= baselineRate * SPIKE_MULTIPLIER) {
-            activeAnomalyKeys.add(key);
-            double spikePct  = ((currentRate - baselineRate) / baselineRate) * 100.0;
-            Severity severity = spikePct >= 1_000.0 ? Severity.CRITICAL : Severity.WARNING;
-
-            AlertEvent alert = new AlertEvent(
-                    UUID.randomUUID().toString(),
-                    key.service(),
-                    key.statusCode(),
-                    baselineRate,
-                    currentRate,
-                    spikePct,
-                    Instant.now(),
-                    severity
-            );
-
-            alerts.add(alert);
-            alertSink.accept(alert);
-            log.warn("ANOMALY: {}", alert.toSummary());
+        if (currentRate >= threshold) {
+            double spikePct = ((currentRate - baselineRate) / baselineRate) * 100.0;
+            window.taintCurrent(now);
+            fireAlert(key, baselineRate, currentRate, spikePct);
         } else if (activeAnomalyKeys.remove(key)) {
             resolveSink.run();
             log.info("RESOLVED: anomaly cleared for service={} statusCode={}", key.service(), key.statusCode());
+        } else if (currentCount >= INTERESTING_CURRENT_COUNT && window.markSuppressionLog(now)) {
+            log.info("Suppressed (below 6× threshold): service={} statusCode={} current={} baseline={} need>={} excludedTaintedBuckets={}",
+                    key.service(), key.statusCode(), currentCount,
+                    String.format("%.1f", baselineRate),
+                    String.format("%.1f", threshold),
+                    excludedTainted);
         }
+    }
+
+    private void fireAlert(WindowKey key, double baselineRate, double currentRate, double spikePct) {
+        activeAnomalyKeys.add(key);
+        Severity severity = spikePct >= 1_000.0 ? Severity.CRITICAL : Severity.WARNING;
+
+        AlertEvent alert = new AlertEvent(
+                UUID.randomUUID().toString(),
+                key.service(),
+                key.statusCode(),
+                baselineRate,
+                currentRate,
+                spikePct,
+                Instant.now(),
+                severity
+        );
+
+        alerts.add(alert);
+        alertSink.accept(alert);
+        log.warn("ANOMALY: {}", alert.toSummary());
     }
 
     private record WindowKey(String service, int statusCode) {}
@@ -143,13 +187,17 @@ public final class AnomalyDetector {
      *
      * <p>Each slot is identified by its bucket ID ({@code epochMs / BUCKET_WIDTH_MS}).
      * When time advances past the current slot, stale slots are zeroed before writing,
-     * so the window naturally expires old data without a background sweep.
+     * so the window naturally expires old data without a background sweep. Per-slot
+     * {@code tainted} flags ride along so a previously-anomalous bucket can be excluded
+     * from baseline calculations until it ages out.
      */
     private static final class SlidingWindow {
 
-        private final long[] counts    = new long[WINDOW_SLOTS];
-        private final long[] bucketIds = new long[WINDOW_SLOTS];
-        private long lastBucketId = Long.MIN_VALUE;
+        private final long[]    counts    = new long[WINDOW_SLOTS];
+        private final long[]    bucketIds = new long[WINDOW_SLOTS];
+        private final boolean[] tainted   = new boolean[WINDOW_SLOTS];
+        private long lastBucketId             = Long.MIN_VALUE;
+        private long lastSuppressionLogBucket = Long.MIN_VALUE;
 
         synchronized void record(long epochMs) {
             long bucketId = epochMs / BUCKET_WIDTH_MS;
@@ -157,17 +205,35 @@ public final class AnomalyDetector {
             counts[(int) (bucketId % WINDOW_SLOTS)]++;
         }
 
-        synchronized long[] snapshot(long nowMs) {
+        /** Marks the current bucket as anomalous so future baseline calculations exclude it. */
+        synchronized void taintCurrent(long nowMs) {
+            long currentBucketId = nowMs / BUCKET_WIDTH_MS;
+            advance(currentBucketId);
+            tainted[slotFor(currentBucketId)] = true;
+        }
+
+        /** Returns true at most once per minute per window — throttles suppression logging. */
+        synchronized boolean markSuppressionLog(long nowMs) {
+            long currentBucketId = nowMs / BUCKET_WIDTH_MS;
+            if (lastSuppressionLogBucket == currentBucketId) return false;
+            lastSuppressionLogBucket = currentBucketId;
+            return true;
+        }
+
+        synchronized Snapshot snapshot(long nowMs) {
             long currentBucketId = nowMs / BUCKET_WIDTH_MS;
             advance(currentBucketId);
 
-            long[] result = new long[WINDOW_SLOTS];
+            long[]    resultCounts  = new long[WINDOW_SLOTS];
+            boolean[] resultTainted = new boolean[WINDOW_SLOTS];
             for (int i = 0; i < WINDOW_SLOTS; i++) {
                 long targetId = currentBucketId - (WINDOW_SLOTS - 1 - i);
                 int  slot     = slotFor(targetId);
-                result[i]     = (bucketIds[slot] == targetId) ? counts[slot] : 0;
+                boolean fresh = bucketIds[slot] == targetId;
+                resultCounts[i]  = fresh ? counts[slot]  : 0;
+                resultTainted[i] = fresh && tainted[slot];
             }
-            return result;
+            return new Snapshot(resultCounts, resultTainted);
         }
 
         private void advance(long newBucketId) {
@@ -186,6 +252,7 @@ public final class AnomalyDetector {
                 int  slot = slotFor(id);
                 counts[slot]    = 0;
                 bucketIds[slot] = id;
+                tainted[slot]   = false;
             }
             lastBucketId = newBucketId;
         }
@@ -193,5 +260,7 @@ public final class AnomalyDetector {
         private static int slotFor(long bucketId) {
             return (int) ((bucketId % WINDOW_SLOTS + WINDOW_SLOTS) % WINDOW_SLOTS);
         }
+
+        record Snapshot(long[] counts, boolean[] tainted) {}
     }
 }
